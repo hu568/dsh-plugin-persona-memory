@@ -1,0 +1,62 @@
+{
+  "name": "@dsh-external/dsh-persona-memory",
+  "version": "0.1.1",
+  "description": "DSH 角色设定与长期记忆：角色库（persona.yml + SOUL.md + USER.md）、全局/项目两级记忆（FACT.md / MEMORY.md）、长期记忆 JOURNAL.jsonl；首条消息快照注入，对所有 agent 预设生效，附右侧栏管理面板",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "skills",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hu568/dsh-plugin-persona-memory.git"
+  },
+  "homepage": "https://github.com/hu568/dsh-plugin-persona-memory#readme",
+  "bugs": {
+    "url": "https://github.com/hu568/dsh-plugin-persona-memory/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-plugin-pack",
+    "cordis",
+    "cordis-plugin",
+    "persona",
+    "memory"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh-system-prompt": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
+    "cordis": ">=4.0.0-rc <5"
+  },
+  "dependencies": {
+    "schemastery": "npm:@deepseek-ai/schemastery@3.18.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  }
+}

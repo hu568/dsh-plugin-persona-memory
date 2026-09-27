@@ -1,0 +1,12 @@
+# dsh-persona-memory bundle 层：把角色/记忆插件行插进**宿主组合**。
+#
+# 这里是宿主平面，不是 agent 预设平面——角色设定与记忆要对所有预设的每个会话
+# 生效，所以它必须和 `system-prompt` / `tools` 注册表同层。
+#
+# 注册的四个提示词段落名沿用 `memory:` 前缀（memory:soul / memory:user /
+# memory:facts / memory:journal）：用户自建的 router-standard 预设会在精简模式里
+# 剥掉除 `memory:*` 外的全部段落，沿用该前缀让角色与记忆在那里也能存活。
+- insert:
+    - id: persona-memory
+      name: '@dsh-external/dsh-persona-memory'
+      config: {}
