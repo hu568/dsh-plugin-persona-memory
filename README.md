@@ -66,6 +66,36 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 > 剥掉除 `memory:*` 外的全部段落。沿用这个前缀，角色与记忆在那种模式下也能存活，
 > 不需要改预设里的剥离逻辑。
 
+> **为什么四段都设 `interpolate: false`**：宿主 `@deepseek-ai/dsh-system-prompt` 的
+> `renderPrompt()` 会对未标记的段落做 `{{变量}}` 插值，而 `interpolate()` 对
+> **未注册的名字是抛错**（不是原样保留）——它认为「malformed prompt 比响亮地失败更糟」。
+> 本插件的段落内容全是用户可写的自由文本（FACT.md、JOURNAL.jsonl、SOUL.md…），
+> 只要哪篇记忆里写了一句 `{{变量}}`，整个 turn 就会以
+> `malformed prompt variable reference "{{变量}}" in section "memory:journal"` 失败。
+> 因此这些段落一律 `interpolate: false`：**内容原样进提示词，`{{…}}` 不再有特殊含义**。
+
+## 注入作用域：子代理只拿项目记忆
+
+| 段落 | 主会话 | 子代理会话 |
+|---|---|---|
+| `memory:soul` / `memory:user`（角色） | ✅ | ❌ 不注入 |
+| `memory:facts` → 全局 FACT.md | ✅ | ❌ 不注入 |
+| `memory:facts` → 项目 MEMORY.md | ✅ | ✅ 注入 |
+| `memory:journal`（长期日志） | ✅ | ❌ 不注入 |
+
+理由：子代理拿到的是一份**具体委派任务**。角色人设、跨项目全局事实、历史流水账
+都与该任务无关，灌进去只会让子代理的上下文变宽、更容易跑偏；项目记忆才是它需要的
+那部分（本仓库/本项目的约定与事实）。
+
+判定「是不是子代理」读的是宿主真实写入的 `session.header`：`origin === 'subagent'`
+优先，另外 `parentSession` 存在或 `delegationDepth > 0` 也认（兼容只写血缘的旧日志
+与外部 provider）。宁可判多，也不要漏判后把主会话的角色灌进委派任务。
+
+子代理只注入项目记忆时，写入契约也换成项目版：明确告诉它「全局记忆与角色未注入」，
+并允许它**只读**地 `action=read` / `action=search` 去查全局记忆，而不是以为不存在。
+
+想恢复旧行为（子代理与主会话注入完全相同）就设 `subagentProjectOnly: false`。
+
 ## 注入时机：首条消息快照冻结
 
 - **首条用户消息之前**：每轮组装直接读盘 → 「先建会话 → 改角色/记忆 → 再发第一条消息」拿到最新内容。
@@ -130,6 +160,7 @@ POST /persona-memory/api/journal/{append,search}
 | `personaEnabled` | `true` | 注入 `<soul>` / `<user>` |
 | `memoryEnabled` | `true` | 注入 `<memory>` / `<journal>` |
 | `journalEnabled` | `true` | 注入最近日志条目 |
+| `subagentProjectOnly` | `true` | 子代理会话只注入项目记忆（关掉＝子代理与主会话一致） |
 | `maxChars` | `8000` | 单文件注入字符上限 |
 | `journalLimit` | `2000` | 日志扫描行上限 |
 | `journalInject` | `6` | 注入最近日志条数 |
@@ -141,12 +172,77 @@ POST /persona-memory/api/journal/{append,search}
 - 角色库为空时建 `personas/default/`：把旧版 `$DSH_HOME/memory/{SOUL.md,USER.md}`
   的内容迁进去（旧文件保留不动），并把 `default` 设为当前角色。
 
+## 排错：改完 `lib/*.js` 为什么还是旧行为？
+
+**因为 DSH 默认不监听 `node_modules`，而且 Node 会缓存已 import 的 ESM 模块。**
+改完插件源码后，即使 `plugin_manager set_bundle enabled=true` 报告
+`application: applied`，**正在运行的那个 Host 进程里仍是旧模块**——它只重新组合了
+profile 补丁层（让 `persona-memory` 这一行重新挂上），并不会重新从磁盘 import
+那份 `lib/index.js`。
+
+具体机制（读宿主源码得到）：
+
+- `dsh-hmr` 的默认 `ignored` 含 `**/node_modules`，而插件装在
+  `profiles/<name>/node_modules/@dsh-external/...` 下 ⇒ 它**根本不在监听范围内**。
+- base 组合包里 `hmr` 的 `config.root` 是 `[]`（见 `profiles/<name>/cordis.yml`），
+  即「只看显式注册的配置文件，不做源码模块监听」。
+- 模块一旦被 import 就进了 Node 的 ESM `loadCache`；不清缓存 + 重新 import，
+  拿到的就是旧命名空间。
+
+因此：**改了 `lib/*.js` 必须重启 DSH**（或让 `dsh-hmr` 真的能看见该文件并走
+`partialReload()` 清缓存）。改 `cordis.yml` / `cordis.patch.yml` 这类配置才可能热生效。
+
+自检「当前跑的是哪一版」：
+
+```powershell
+# 1) 磁盘上这份是不是新的
+Select-String -Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@dsh-external\dsh-persona-memory\lib\index.js" -Pattern 'interpolate: false'
+
+# 2) Host 主进程是什么时候起的（早于你改文件的时间 ⇒ 它跑的是旧代码）
+Get-Process | Where-Object ProcessName -match 'DeepSeek' | Select-Object Id,StartTime
+```
+
+> **改已安装副本时的坑（实测）**：这个 profile 用 `nodeLinker: hoisted`，git 依赖的
+> **文件**是硬链接到 pnpm store 的 —— 没改过的 `browser-use` 用 `fsutil hardlink list`
+> 能看到 2 个链接（profile 路径 + store 路径）。所以**直接 `Copy-Item` 覆盖会写穿到
+> store**，可能污染其他 profile。正确做法：
+> `Copy-Item` 到临时文件 → `Remove-Item` 原文件（断开链接）→ `Move-Item` 回来。
+> 改完 `fsutil hardlink list` 应只剩 1 个链接。
+
+## 回归测试
+
+```powershell
+# 纯 node 那一条
+node test/scope.test.mjs
+# 其余几条（要真实宿主渲染器 / 真实 cordis）用统一入口，会自动跑仓库源码 + 已安装副本
+pwsh -File test/run-all.ps1
+```
+
+| 测试 | 验什么 |
+|---|---|
+| `scope.test.mjs` | 注入作用域：子代理只拿项目记忆；`subagentProjectOnly` 可回退 |
+| `host-interpolate.test.mjs` | 用**真实** `renderPrompt()` 验证 `interpolate: false` 生效；反证「摘掉它就会复现用户的报错」 |
+| `cordis-integration.test.mjs` | 真实 `Context` + 真实 `system-prompt` 全链路（section 注册 → assemble → render） |
+| `real-data.test.mjs` | ★ 用**用户真实**的 `$DSH_HOME/memory/JOURNAL.jsonl`（含 `{{变量}}`）跑真实渲染，不抛错 |
+
 ## 已知边界
 
 - **`complete: true` 的预设**（如内置 `minimal`）会把系统提示词替换成唯一一段，
   此时任何段落都注入不进去——那是该预设的语义，不是本插件的开关。
 - 会话快照不随会话删除而回收；`snapshots/` 里会留小 JSON。文件很小，需要时手工清。
 - 面板的「项目」列表来自本进程见过的会话 cwd；没有会话跑过的项目不会出现。
+- **角色 / 全局记忆 / 日志只在主会话注入**。子代理需要这些内容时，让它自己调
+  `memory action=read` / `action=search`（只读）——注入面收窄是有意的。
+
+## 回归测试
+
+```powershell
+node test/scope.test.mjs
+```
+
+覆盖两个曾经真实炸掉的点：① 段落必须 `interpolate: false`（记忆里出现 `{{变量}}`
+不能让 turn 崩）；② 子代理只注入项目记忆，角色/全局记忆/日志一律不注入，
+且 `subagentProjectOnly: false` 能回退到旧行为。测试用临时 `DSH_HOME`，不碰真实数据。
 
 ## 仓库结构与源码
 
@@ -157,6 +253,7 @@ POST /persona-memory/api/journal/{append,search}
 | `lib/index.js` | 宿主半：服务注册、提示词段落、`memory` / `persona` 工具、面板 HTTP 路由 |
 | `lib/client.js` | 客户端半：手写 ModuleLoader 包，注册右侧栏标签页 |
 | `lib/types/index.d.ts` | 宿主半的类型声明 |
+| `test/scope.test.mjs` | 注入作用域 + 插值安全的回归测试 |
 | `skills/persona-creator/SKILL.md` | 随包技能 |
 | `cordis.patch.yml` | 组合包层：把 `persona-memory` 行插进宿主组合 |
 
