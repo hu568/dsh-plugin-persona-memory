@@ -1,11 +1,13 @@
 /**
- * 回归测试：注入作用域 + 宿主插值安全。
+ * 回归测试：注入作用域 + 宿主插值安全 + 「长期日志不注入」。
  *
- * 覆盖两个曾经真实炸掉的点：
- *  1. `memory:*` 段落里的任意用户文本（记忆正文/日志/角色文件）可能含 `{{变量}}`，
+ * 覆盖三个曾经真实炸掉的点：
+ *  1. `memory:*` 段落里的任意用户文本（记忆正文/角色文件）可能含 `{{变量}}`，
  *     宿主 @deepseek-ai/dsh-system-prompt 的 interpolate() 会**抛错**；
  *     段落必须带 `interpolate: false`。
- *  2. 子代理会话只注入项目记忆 —— 角色 / 全局 FACT.md / 长期日志一律不注入。
+ *  2. 子代理会话只注入项目记忆 —— 角色 / 全局 FACT.md 一律不注入。
+ *  3. ★ 0.2.0 起长期日志（JOURNAL.jsonl）**任何会话都不注入**：不该再注册
+ *     `memory:journal` 段落，日志正文不应出现在任何一段的输出里（只在契约里留一行指针）。
  *
  * 跑法：node test/scope.test.mjs
  */
@@ -66,7 +68,11 @@ const fakeCtx = {
 };
 mod.apply(fakeCtx, {});
 
-assert.equal(registered.length, 4, '应注册 4 个段落');
+assert.equal(registered.length, 3, '应注册 3 个段落（0.2.0 起不再有 memory:journal）');
+assert.ok(
+    !registered.some((section) => section.name === 'memory:journal'),
+    'memory:journal 段落应已整段移除 —— 长期日志不注入提示词',
+);
 for (const section of registered) {
     assert.equal(
         section.interpolate,
@@ -81,7 +87,7 @@ const sectionOf = (name) => {
     return found;
 };
 
-const config = { maxChars: 8000, memoryEnabled: true, journalEnabled: true, personaEnabled: true };
+const config = { maxChars: 8000, memoryEnabled: true, personaEnabled: true };
 
 /* ── 假 agent/session ─────────────────────────────────────────────────── */
 const makeAgent = (origin) => ({
@@ -99,27 +105,33 @@ const renderAll = (agent) => ({
     soul: sectionOf('memory:soul').text({ agent }),
     user: sectionOf('memory:user').text({ agent }),
     facts: sectionOf('memory:facts').text({ agent }),
-    journal: sectionOf('memory:journal').text({ agent }),
 });
 
-/* ── 主会话：四段全注入 ───────────────────────────────────────────────── */
+/* ── 主会话：三段全注入，日志一字不提 ───────────────────────────────────── */
 const root = renderAll(makeAgent(undefined));
 assert.match(root.soul, /<soul /, '主会话应注入角色 SOUL');
 assert.match(root.user, /<user /, '主会话应注入角色 USER');
 assert.match(root.facts, /### 全局记忆/, '主会话应注入全局记忆');
 assert.match(root.facts, /### 项目记忆/, '主会话应注入项目记忆');
-assert.match(root.journal, /<journal /, '主会话应注入长期日志');
-assert.ok(root.journal.includes('{{变量}}'), '日志里的 {{变量}} 应原样保留（不被宿主插值吞掉/炸掉）');
+
+/* ★ 0.2.0 的核心断言：日志正文**不进**提示词，但要有「去 search」的指针。 */
+for (const [label, out] of [['soul', root.soul], ['user', root.user], ['facts', root.facts]]) {
+    assert.ok(!out.includes('<journal '), `memory:${label} 不应出现 <journal> 标签`);
+    assert.ok(!out.includes('日志里有'), `memory:${label} 不应泄露日志正文「日志里有…」`);
+}
+assert.match(root.facts, /正文未注入/, '契约里应明确告诉模型日志正文未注入');
+assert.match(root.facts, /action=search/, '契约里应指引模型主动 action=search 查历史');
 
 /* ── 子代理：只注入项目记忆 ───────────────────────────────────────────── */
 const child = renderAll(makeAgent('subagent'));
 assert.equal(child.soul, '', '子代理不应注入角色 SOUL');
 assert.equal(child.user, '', '子代理不应注入角色 USER');
-assert.equal(child.journal, '', '子代理不应注入长期日志');
 assert.match(child.facts, /### 项目记忆/, '子代理应注入项目记忆');
 assert.ok(!child.facts.includes('### 全局记忆'), '子代理不应注入全局记忆');
 assert.ok(!child.facts.includes('FACT.md），整篇覆盖'), '子代理不应拿到全局写入契约');
 assert.ok(child.facts.includes('scope=project'), '子代理应拿到项目写入契约');
+assert.ok(!child.facts.includes('日志里有'), '子代理也不应拿到日志正文');
+assert.match(child.facts, /正文未注入/, '子代理契约里也应说明日志未注入');
 
 /* ── 子代理 + 无项目记忆 → 一段都不注入 ───────────────────────────────── */
 // 注意：快照按 session id 缓存，这里必须换一个 id，否则会复用上面的快照。
@@ -130,7 +142,6 @@ const noProject = {
 const bare = renderAll(noProject);
 assert.equal(bare.soul, '');
 assert.equal(bare.user, '');
-assert.equal(bare.journal, '');
 assert.ok(!bare.facts.includes('### 项目记忆'), '没有 MEMORY.md 时不应凭空注入项目记忆');
 
 /* ── 血缘判据：只有 parentSession / delegationDepth 也要认作子代理 ─────── */
@@ -145,7 +156,6 @@ const depthOnly = {
 for (const [label, agent] of [['parentSession', lineageOnly], ['delegationDepth', depthOnly]]) {
     const out = renderAll(agent);
     assert.equal(out.soul, '', `仅凭 ${label} 也应判定为子代理：不应注入角色`);
-    assert.equal(out.journal, '', `仅凭 ${label} 也应判定为子代理：不应注入日志`);
     assert.ok(!out.facts.includes('### 全局记忆'), `仅凭 ${label} 也应判定为子代理：不应注入全局记忆`);
     assert.match(out.facts, /### 项目记忆/, `仅凭 ${label} 也应判定为子代理：应注入项目记忆`);
 }
@@ -157,7 +167,8 @@ mod.apply(fallbackCtx, { subagentProjectOnly: false });
 const child2 = renderAll(makeAgent('subagent'));
 assert.match(child2.soul, /<soul /, '关掉 subagentProjectOnly 后子代理应恢复注入角色');
 assert.match(child2.facts, /### 全局记忆/, '关掉 subagentProjectOnly 后子代理应恢复注入全局记忆');
-assert.match(child2.journal, /<journal /, '关掉 subagentProjectOnly 后子代理应恢复注入日志');
+/* ★ 即使回退成「子代理与主会话一致」，日志仍然不注入 —— 这是 0.2.0 的全局决定。 */
+assert.ok(!child2.facts.includes('日志里有'), '回退 subagentProjectOnly 也不该注入日志正文');
 
 rmSync(home, { recursive: true, force: true });
 console.log('✓ scope.test.mjs 全部通过');

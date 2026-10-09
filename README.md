@@ -51,7 +51,7 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 |------|------|------|
 | 角色设定 | `$DSH_HOME/personas/<id>/{persona.yml,SOUL.md,USER.md}` | 角色库，同一时刻一个「当前角色」 |
 | 全局记忆 | `$DSH_HOME/memory/FACT.md` | 跨会话、跨项目的稳定事实 |
-| 长期日志 | `$DSH_HOME/memory/JOURNAL.jsonl` | 一次性事件/会话笔记，仅追加 + 可检索 |
+| 长期日志 | `$DSH_HOME/memory/JOURNAL.jsonl` | 一次性事件/会话笔记，仅追加 + 可检索；**不注入提示词** |
 | 项目记忆 | `<项目根>/MEMORY.md` | 随项目走；**存在才注入**，不自动创建 |
 | 会话快照 | `$DSH_HOME/memory/snapshots/<sessionId>.json` | 首条消息时固化的注入内容 |
 
@@ -60,19 +60,40 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 - `memory:soul` → `<soul persona="…" id="…">` + 角色编辑契约
 - `memory:user` → `<user persona="…">`
 - `memory:facts` → `<memory>` 全局 + 项目 + 记忆写入契约
-- `memory:journal` → `<journal>` 最近若干条
 
 > **段落名为什么用 `memory:` 前缀**：用户自建的 `router-standard` 预设会在精简模式里
 > 剥掉除 `memory:*` 外的全部段落。沿用这个前缀，角色与记忆在那种模式下也能存活，
 > 不需要改预设里的剥离逻辑。
 
-> **为什么四段都设 `interpolate: false`**：宿主 `@deepseek-ai/dsh-system-prompt` 的
+> **为什么都设 `interpolate: false`**：宿主 `@deepseek-ai/dsh-system-prompt` 的
 > `renderPrompt()` 会对未标记的段落做 `{{变量}}` 插值，而 `interpolate()` 对
 > **未注册的名字是抛错**（不是原样保留）——它认为「malformed prompt 比响亮地失败更糟」。
-> 本插件的段落内容全是用户可写的自由文本（FACT.md、JOURNAL.jsonl、SOUL.md…），
+> 本插件的段落内容全是用户可写的自由文本（FACT.md、SOUL.md…），
 > 只要哪篇记忆里写了一句 `{{变量}}`，整个 turn 就会以
-> `malformed prompt variable reference "{{变量}}" in section "memory:journal"` 失败。
+> `malformed prompt variable reference "{{变量}}" in section "memory:facts"` 失败。
 > 因此这些段落一律 `interpolate: false`：**内容原样进提示词，`{{…}}` 不再有特殊含义**。
+
+## 长期日志：不注入，只按需检索
+
+`JOURNAL.jsonl` 是**无上限增长**的流水账。0.1.x 曾把最近 6 条注入 `<journal>` 段落，
+0.2.0 起**整段移除**，代价与收益：
+
+| | 0.1.x（注入最近 6 条） | 0.2.0（不注入） |
+|---|---|---|
+| 每轮 token | 每轮都为最近 6 条付费，随文件增长 | 0（快照里也不存了） |
+| 内容相关性 | 最近几条常常与当前任务无关 | 由模型自己判断要不要查 |
+| 快照体积 | 随日志增长 | 恒定 |
+| 取旧笔记 | 自动到手 | 要模型主动 `memory action=search` |
+
+**不至于「忘了自己有历史」**：记忆契约里留了一行指针，写明日志有多少条、正文未注入，
+并明确要求模型在觉得「以前可能聊过 / 踩过坑」时主动 `action=search`。子代理契约里也有一行。
+
+日志的**写与读能力完全保留**：`memory` 工具的 `append` / `search` / `read`、
+面板的「日志」标签页、`/api/journal/{append,search}` 路由都照旧可用。
+变的只是「不再自动灌进上下文」。
+
+> 旧 profile 里若写了 `journalEnabled` / `journalInject` / `journalLimit`，删掉即可 ——
+> `schemastery` 对未知键是静默保留不抛错，留着也不会让插件起不来（实测）。
 
 ## 注入作用域：子代理只拿项目记忆
 
@@ -81,7 +102,7 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 | `memory:soul` / `memory:user`（角色） | ✅ | ❌ 不注入 |
 | `memory:facts` → 全局 FACT.md | ✅ | ❌ 不注入 |
 | `memory:facts` → 项目 MEMORY.md | ✅ | ✅ 注入 |
-| `memory:journal`（长期日志） | ✅ | ❌ 不注入 |
+| 长期日志 JOURNAL.jsonl | ❌ 一律不注入（0.2.0 起） | ❌ |
 
 理由：子代理拿到的是一份**具体委派任务**。角色人设、跨项目全局事实、历史流水账
 都与该任务无关，灌进去只会让子代理的上下文变宽、更容易跑偏；项目记忆才是它需要的
@@ -101,6 +122,7 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 - **首条用户消息之前**：每轮组装直接读盘 → 「先建会话 → 改角色/记忆 → 再发第一条消息」拿到最新内容。
 - **首条用户消息之后**：把角色 + 记忆固化成本会话快照（内存 + 落盘），此后每轮读快照。
   于是 KV 缓存前缀绝对稳定，会话中途改文件不影响它，**新会话**才看到更新。
+  快照里**不含**日志正文（0.2.0 起），只留一个 `journalTotal` 计数供契约措辞使用。
 - 子代理会话的快照只留内存、不落盘（防止 `snapshots/` 随委派次数膨胀）。
 - 快照落盘让 resume / 进程重启后语义不变。
 
@@ -158,13 +180,13 @@ POST /persona-memory/api/journal/{append,search}
 | 字段 | 默认 | 说明 |
 |------|------|------|
 | `personaEnabled` | `true` | 注入 `<soul>` / `<user>` |
-| `memoryEnabled` | `true` | 注入 `<memory>` / `<journal>` |
-| `journalEnabled` | `true` | 注入最近日志条目 |
+| `memoryEnabled` | `true` | 注入 `<memory>` |
 | `subagentProjectOnly` | `true` | 子代理会话只注入项目记忆（关掉＝子代理与主会话一致） |
 | `maxChars` | `8000` | 单文件注入字符上限 |
-| `journalLimit` | `2000` | 日志扫描行上限 |
-| `journalInject` | `6` | 注入最近日志条数 |
 | `panelPath` | `/persona-memory` | 面板 HTTP 前缀 |
+
+> 0.2.0 移除了 `journalEnabled` / `journalInject` / `journalLimit` 三个键 ——
+> 长期日志不再进提示词，这些开关没有意义了。
 
 ## 首次运行会做什么
 
@@ -220,10 +242,15 @@ pwsh -File test/run-all.ps1
 
 | 测试 | 验什么 |
 |---|---|
-| `scope.test.mjs` | 注入作用域：子代理只拿项目记忆；`subagentProjectOnly` 可回退 |
+| `scope.test.mjs` | 注入作用域：子代理只拿项目记忆；`subagentProjectOnly` 可回退；**日志段落不存在** |
 | `host-interpolate.test.mjs` | 用**真实** `renderPrompt()` 验证 `interpolate: false` 生效；反证「摘掉它就会复现用户的报错」 |
 | `cordis-integration.test.mjs` | 真实 `Context` + 真实 `system-prompt` 全链路（section 注册 → assemble → render） |
-| `real-data.test.mjs` | ★ 用**用户真实**的 `$DSH_HOME/memory/JOURNAL.jsonl`（含 `{{变量}}`）跑真实渲染，不抛错 |
+| `snapshot-resume.test.mjs` | 已固化快照的续接路径；旧快照里的 `journal` 字段必须被忽略 |
+| `real-data.test.mjs` | ★ 用**用户真实**的 `$DSH_HOME` 记忆与角色文件跑真实渲染，不抛错 |
+
+覆盖两个曾经真实炸掉的点：① 段落必须 `interpolate: false`（记忆里出现 `{{变量}}`
+不能让 turn 崩）；② 子代理只注入项目记忆，角色/全局记忆一律不注入，
+且 `subagentProjectOnly: false` 能回退到旧行为。测试用临时 `DSH_HOME`，不碰真实数据。
 
 ## 已知边界
 
@@ -231,18 +258,12 @@ pwsh -File test/run-all.ps1
   此时任何段落都注入不进去——那是该预设的语义，不是本插件的开关。
 - 会话快照不随会话删除而回收；`snapshots/` 里会留小 JSON。文件很小，需要时手工清。
 - 面板的「项目」列表来自本进程见过的会话 cwd；没有会话跑过的项目不会出现。
-- **角色 / 全局记忆 / 日志只在主会话注入**。子代理需要这些内容时，让它自己调
+- **角色 / 全局记忆只在主会话注入**。子代理需要这些内容时，让它自己调
   `memory action=read` / `action=search`（只读）——注入面收窄是有意的。
-
-## 回归测试
-
-```powershell
-node test/scope.test.mjs
-```
-
-覆盖两个曾经真实炸掉的点：① 段落必须 `interpolate: false`（记忆里出现 `{{变量}}`
-不能让 turn 崩）；② 子代理只注入项目记忆，角色/全局记忆/日志一律不注入，
-且 `subagentProjectOnly: false` 能回退到旧行为。测试用临时 `DSH_HOME`，不碰真实数据。
+- **长期日志任何会话都不注入**（0.2.0 起）。旧版本落盘的会话快照里可能还留着
+  `journal` 字段，读快照时代码会忽略它 —— 无害，也可以直接删掉那些 JSON。
+- 不注入日志 ≠ 模型自动会查。契约里的指针是**提示**不是保证：模型仍可能漏查。
+  这是拿 token 换准确率的有意取舍 —— 想要「零漏查」请把稳定结论写进 FACT.md。
 
 ## 仓库结构与源码
 

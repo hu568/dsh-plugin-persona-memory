@@ -7,7 +7,7 @@ export declare const inject: string[];
 /**
  * 注入作用域。
  *
- * - `full`（主会话）：角色设定 + 全局记忆 + 项目记忆 + 长期日志。
+ * - `full`（主会话）：角色设定 + 全局记忆 + 项目记忆。
  * - `project`（子代理会话）：**只**注入项目记忆。
  */
 export declare const INJECT_FULL = "full";
@@ -15,18 +15,12 @@ export declare const INJECT_PROJECT_ONLY = "project";
 export interface Config {
     /** 注入角色设定（SOUL/USER）。 */
     personaEnabled: boolean;
-    /** 注入记忆（FACT.md / 项目 MEMORY.md / JOURNAL）。 */
+    /** 注入记忆（FACT.md / 项目 MEMORY.md）。 */
     memoryEnabled: boolean;
-    /** 注入最近日志条目。 */
-    journalEnabled: boolean;
     /** 子代理会话是否只注入项目记忆（关掉即恢复「子代理与主会话注入相同内容」）。 */
     subagentProjectOnly: boolean;
     /** 单文件注入字符上限。 */
     maxChars: number;
-    /** 日志扫描行上限。 */
-    journalLimit: number;
-    /** 注入最近日志条数。 */
-    journalInject: number;
     /** 右侧栏面板的 HTTP 前缀。 */
     panelPath: string;
 }

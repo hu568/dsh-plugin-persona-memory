@@ -12,7 +12,11 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+/** 仓库源码入口：从本测试文件自身位置推导，别写死绝对路径（插件搬过家）。 */
+const REPO_ENTRY = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js')).href;
 
 const ASAR = process.env.DSH_ASAR_ROOT
     ?? 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/@deepseek-ai';
@@ -42,8 +46,7 @@ writeFileSync(join(personasDir, 'default', 'USER.md'), '# USER\n\n叫我 {{用�
 writeFileSync(join(personasDir, '.active'), 'default\n', 'utf8');
 writeFileSync(join(projectRoot, 'MEMORY.md'), '# 项目\n\n本项目用 {{项目变量}}。\n', 'utf8');
 
-const mod = await import(process.env.PERSONA_MEMORY_ENTRY
-    ?? 'file:///D:/test1/dsh-plugin-persona-memory/lib/index.js');
+const mod = await import(process.env.PERSONA_MEMORY_ENTRY ?? REPO_ENTRY);
 
 /* ── 捕获插件真实注册的段落对象 ── */
 const registered = [];
@@ -81,27 +84,30 @@ assert.doesNotThrow(() => { rendered = renderPrompt(rootAssembly); },
 assert.ok(rendered.includes('{{变量}}'), '记忆里的 {{变量}} 应原样进入提示词');
 assert.ok(rendered.includes('{{角色名}}'), '角色文件里的 {{角色名}} 应原样进入提示词');
 assert.ok(rendered.includes('{{项目变量}}'), '项目记忆里的 {{项目变量}} 应原样进入提示词');
+/* ★ 0.2.0：日志正文不进提示词 —— 即使 JOURNAL.jsonl 里有 {{变量}}，它也不该出现。 */
+assert.ok(!rendered.includes('<journal '), '不应再有 <journal> 段落');
+assert.ok(!rendered.includes('日志里有'), '日志正文不应进入提示词');
 
-/* ══ 2. 反证：只把 memory:journal 的 interpolate:false 摘掉，就精确复现用户的错误 ══
+/* ══ 2. 反证：只把 memory:facts 的 interpolate:false 摘掉，就精确复现用户的错误 ══
  *
- * 用户的真实数据里只有 JOURNAL.jsonl 含 `{{变量}}`（SOUL.md / FACT.md 都没有），
- * 所以当时崩的正是 memory:journal —— 与截图逐字一致。这里刻意只摘 journal 一个
- * 段落的标记，让 memory:soul / :user / :facts 仍受保护，从而复现同一个失败面。 */
-const journal = registered.find((section) => section.name === 'memory:journal');
-assert.ok(journal, '应注册了 memory:journal');
-const unguardedJournal = {
-    sections: rootAssembly.sections.map((section) => section.name === 'memory:journal'
+ * 用户的真实数据里 FACT.md 之外只有 JOURNAL.jsonl 含 `{{变量}}`；0.2.0 起日志不再
+ * 注入，于是复现面落到 memory:facts（它照样装着用户可写的自由文本）。
+ * 这里刻意只摘 facts 一个段落的标记，让 memory:soul / :user 仍受保护。 */
+const facts = registered.find((section) => section.name === 'memory:facts');
+assert.ok(facts, '应注册了 memory:facts');
+const unguardedFacts = {
+    sections: rootAssembly.sections.map((section) => section.name === 'memory:facts'
         ? { name: section.name, text: section.text }
         : section),
     variables: {},
 };
 assert.throws(
-    () => renderPrompt(unguardedJournal),
+    () => renderPrompt(unguardedFacts),
     (error) => {
         assert.match(String(error.message), /malformed prompt variable reference/,
             '去掉 interpolate:false 应复现 malformed prompt variable reference');
-        assert.match(String(error.message), /memory:journal/,
-            '复现的错误应点名 memory:journal（与用户截图一致）');
+        assert.match(String(error.message), /memory:facts/,
+            '复现的错误应点名 memory:facts');
         assert.match(String(error.message), /variable names match/,
             '复现的应是「变量名不合法」那一支（与用户截图逐字一致）');
         return true;
@@ -117,7 +123,8 @@ assert.ok(childRendered.includes('### 项目记忆'), '子代理应拿到项目�
 assert.ok(!childRendered.includes('### 全局记忆'), '子代理不应拿到全局记忆');
 assert.ok(!childRendered.includes('<soul '), '子代理不应拿到角色 SOUL');
 assert.ok(!childRendered.includes('<user '), '子代理不应拿到角色 USER');
-assert.ok(!childRendered.includes('<journal '), '子代理不应拿到长期日志');
+assert.ok(!childRendered.includes('<journal '), '不应有 <journal> 段落');
+assert.ok(!childRendered.includes('日志里有'), '子代理不应拿到日志正文');
 
 rmSync(home, { recursive: true, force: true });
 console.log('✓ host-interpolate.test.mjs 全部通过（用真实宿主渲染器验证）');

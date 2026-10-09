@@ -13,7 +13,11 @@
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+/** 仓库源码入口：从本测试文件自身位置推导，别写死绝对路径（插件搬过家）。 */
+const REPO_ENTRY = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js')).href;
 
 const ASAR = process.env.DSH_ASAR_ROOT
     ?? 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/@deepseek-ai';
@@ -37,11 +41,9 @@ mkdirSync(join(home, 'memory'), { recursive: true });
 const journalPath = join(home, 'memory', 'JOURNAL.jsonl');
 const factPath = join(home, 'memory', 'FACT.md');
 
-/* 先确认（拷贝来的）真实数据里确实存在会让旧版崩溃的内容；否则这个测试没有意义。 */
+/* 先确认（拷贝来的）真实数据规模 —— 0.2.0 起日志不再注入，这里主要看日志确实存在。 */
 const journalRaw = existsSync(journalPath) ? readFileSync(journalPath, 'utf8') : '';
-assert.ok(journalRaw.includes('{{'),
-    `真实 JOURNAL.jsonl 里应含 {{…}}（否则测不出修复）: ${join(REAL_HOME, 'memory', 'JOURNAL.jsonl')}`);
-console.log(`  · 真实 journal 含 {{…}}：是（${journalRaw.split(/\r?\n/).filter((l) => l.trim()).length} 条，已拷贝到临时 home）`);
+console.log(`  · 真实 journal：${journalRaw.split(/\r?\n/).filter((l) => l.trim()).length} 条（0.2.0 起正文不注入，只在契约里留指针）`);
 if (existsSync(factPath)) {
     console.log(`  · 真实 FACT.md 含 {{…}}：${readFileSync(factPath, 'utf8').includes('{{') ? '是' : '否'}`);
 }
@@ -50,8 +52,7 @@ const { Context } = await import(`file:///${ASAR}/cordis/lib/index.js`);
 const SystemPrompt = (await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`)).default;
 const { renderPrompt } = await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`);
 
-const entry = process.env.PERSONA_MEMORY_ENTRY
-    ?? 'file:///D:/test1/dsh-plugin-persona-memory/lib/index.js';
+const entry = process.env.PERSONA_MEMORY_ENTRY ?? REPO_ENTRY;
 const personaMemory = await import(entry);
 console.log(`  · 被测插件：${entry}`);
 
@@ -80,13 +81,30 @@ await assert.doesNotReject(async () => { rootText = await renderFor(rootAgent); 
     '★ 用真实记忆数据 + 真实宿主渲染器，主会话组装必须不抛错（这就是用户崩溃的那条路径）');
 
 console.log('  · 主会话渲染成功，长度=%d', rootText.length);
-assert.ok(rootText.includes('{{变量}}'), '真实 journal 里的 {{变量}} 应原样进入提示词，而不是被插值/炸掉');
+/* ★ 0.2.0 核心断言：真实的几十条日志**一条都不该进**提示词。 */
+assert.ok(!rootText.includes('<journal '), '不应再有 <journal> 段落');
+const firstEntry = journalRaw.split(/\r?\n/).filter((l) => l.trim()).pop();
+if (firstEntry !== undefined) {
+    try {
+        const parsed = JSON.parse(firstEntry);
+        const probe = String(parsed.text ?? '').slice(0, 24);
+        assert.ok(!rootText.includes(probe), `日志正文不应进入提示词（探测串：${probe}）`);
+    } catch {
+        /* 最后一行是坏数据，跳过探测 */
+    }
+}
+assert.match(rootText, /正文未注入/, '契约里应有「日志正文未注入 + 主动 search」的指针');
+/* 仍要验证 {{…}} 不会被插值炸掉：真实 FACT.md / SOUL.md 里有就断言。 */
+const factRaw = existsSync(factPath) ? readFileSync(factPath, 'utf8') : '';
+if (factRaw.includes('{{')) {
+    assert.ok(rootText.includes('{{'), '真实 FACT.md 里的 {{…}} 应原样保留，而不是被插值/炸掉');
+}
 
 /* ── 子代理：只注入项目记忆 ── */
 const childText = await renderFor(childAgent);
 assert.ok(!childText.includes('<soul '), '子代理不应注入角色 SOUL');
 assert.ok(!childText.includes('<user '), '子代理不应注入角色 USER');
-assert.ok(!childText.includes('<journal '), '子代理不应注入长期日志');
+assert.ok(!childText.includes('<journal '), '不应有 <journal> 段落');
 assert.ok(!childText.includes('### 全局记忆'), '子代理不应注入全局记忆');
 console.log('  · 子代理渲染成功，长度=%d（无角色/全局/日志）', childText.length);
 

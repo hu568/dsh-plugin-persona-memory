@@ -3,9 +3,10 @@
 # 这里是宿主平面，不是 agent 预设平面——角色设定与记忆要对所有预设的每个会话
 # 生效，所以它必须和 `system-prompt` / `tools` 注册表同层。
 #
-# 注册的四个提示词段落名沿用 `memory:` 前缀（memory:soul / memory:user /
-# memory:facts / memory:journal）：用户自建的 router-standard 预设会在精简模式里
+# 注册的提示词段落名沿用 `memory:` 前缀（memory:soul / memory:user /
+# memory:facts）：用户自建的 router-standard 预设会在精简模式里
 # 剥掉除 `memory:*` 外的全部段落，沿用该前缀让角色与记忆在那里也能存活。
+# （0.1.x 还有第四段 `memory:journal`，0.2.0 起已整段移除：长期日志不再注入。）
 - insert:
     - id: persona-memory
       name: '@dsh-external/dsh-persona-memory'

@@ -12,7 +12,11 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+/** 仓库源码入口：从本测试文件自身位置推导，别写死绝对路径（插件搬过家）。 */
+const REPO_ENTRY = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js')).href;
 
 const ASAR = process.env.DSH_ASAR_ROOT
     ?? 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/@deepseek-ai';
@@ -41,8 +45,7 @@ writeFileSync(join(personasDir, 'default', 'USER.md'), '# USER\n\n叫我 {{用�
 writeFileSync(join(personasDir, '.active'), 'default\n', 'utf8');
 writeFileSync(join(projectRoot, 'MEMORY.md'), '# 项目\n\n本项目用 {{项目变量}}。\n', 'utf8');
 
-const personaMemory = await import(process.env.PERSONA_MEMORY_ENTRY
-    ?? 'file:///D:/test1/dsh-plugin-persona-memory/lib/index.js');
+const personaMemory = await import(process.env.PERSONA_MEMORY_ENTRY ?? REPO_ENTRY);
 const { renderPrompt } = await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`);
 
 /* ── 起一个真实的 Context，挂真实的 system-prompt 服务 ── */
@@ -84,13 +87,16 @@ const renderFor = async (agent) => {
 
 /* ══ 1. 主会话：真实 assemble+renderPrompt 不抛错，{{…}} 原样保留 ══ */
 const root = await renderFor(agentOf('root-1', { cwd: projectRoot }));
-assert.ok(root.text.includes('{{变量}}'), '全局/日志里的 {{变量}} 应原样进入提示词');
+assert.ok(root.text.includes('{{变量}}'), '全局记忆里的 {{变量}} 应原样进入提示词');
 assert.ok(root.text.includes('{{角色名}}'), 'SOUL.md 里的 {{角色名}} 应原样进入提示词');
 assert.ok(root.text.includes('{{项目变量}}'), '项目记忆里的 {{项目变量}} 应原样进入提示词');
 assert.ok(root.text.includes('### 全局记忆'), '主会话应注入全局记忆');
 assert.ok(root.text.includes('### 项目记忆'), '主会话应注入项目记忆');
 assert.ok(root.text.includes('<soul '), '主会话应注入角色 SOUL');
-assert.ok(root.text.includes('<journal '), '主会话应注入长期日志');
+/* ★ 0.2.0：走完整 assemble→render 链路时，日志正文也不该出现。 */
+assert.ok(!root.text.includes('<journal '), '不应再有 <journal> 段落');
+assert.ok(!root.text.includes('日志里有'), '日志正文不应进入提示词');
+assert.match(root.text, /正文未注入/, '契约里应有「日志正文未注入」的指针');
 
 /* 顺带确认：宿主的 {{cwd}} 变量仍然正常工作（没被 interpolate:false 波及） */
 assert.ok(!root.text.includes('{{cwd}}'), '部署人格里的 {{cwd}} 仍应被宿主插值');
@@ -102,7 +108,8 @@ assert.ok(child.text.includes('{{项目变量}}'), '子代理的项目记忆 {{�
 assert.ok(!child.text.includes('### 全局记忆'), '子代理不应注入全局记忆');
 assert.ok(!child.text.includes('<soul '), '子代理不应注入角色 SOUL');
 assert.ok(!child.text.includes('<user '), '子代理不应注入角色 USER');
-assert.ok(!child.text.includes('<journal '), '子代理不应注入长期日志');
+assert.ok(!child.text.includes('<journal '), '不应有 <journal> 段落');
+assert.ok(!child.text.includes('日志里有'), '子代理不应注入日志正文');
 assert.ok(!child.text.includes('{{角色名}}'), '子代理不应看到角色文件内容');
 
 /* ══ 3. 每次组装都可重复（section 注册是幂等的，没有重复名冲突） ══ */
