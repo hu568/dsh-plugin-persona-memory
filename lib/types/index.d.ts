@@ -21,6 +21,8 @@ export interface Config {
     subagentProjectOnly: boolean;
     /** 单文件注入字符上限。 */
     maxChars: number;
+    /** 全局 FACT.md 的行数硬上限（`action=update, scope=global` 与面板写入都受它约束）。 */
+    maxFactLines: number;
     /** 右侧栏面板的 HTTP 前缀。 */
     panelPath: string;
 }

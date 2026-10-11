@@ -45,35 +45,45 @@ function Invoke-Mjs {
 $plainNode = 'C:\Users\Administrator\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe'
 $failures = @()
 
-Write-Host '=== 1/6 scope.test.mjs（仓库源码，纯 node）' -ForegroundColor Cyan
+Write-Host '=== 1/7 scope.test.mjs（仓库源码，纯 node）' -ForegroundColor Cyan
 & $plainNode (Join-Path $repo 'test\scope.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'scope.test.mjs (repo)' }
 
-Write-Host '=== 2/6 host-interpolate.test.mjs（仓库源码，真实宿主渲染器）' -ForegroundColor Cyan
+Write-Host '=== 2/7 fact-limit.test.mjs（仓库源码，纯 node：FACT.md 行数硬上限）' -ForegroundColor Cyan
+& $plainNode (Join-Path $repo 'test\fact-limit.test.mjs')
+if ($LASTEXITCODE -ne 0) { $failures += 'fact-limit.test.mjs (repo)' }
+
+Write-Host '=== 3/7 host-interpolate.test.mjs（仓库源码，真实宿主渲染器）' -ForegroundColor Cyan
 $r = Invoke-Mjs -Script (Join-Path $repo 'test\host-interpolate.test.mjs')
 Write-Host $r
 if ($r -notmatch 'PASS') { $failures += 'host-interpolate.test.mjs (repo)' }
 
-Write-Host '=== 3/6 cordis-integration.test.mjs（仓库源码，真实 cordis 全链路）' -ForegroundColor Cyan
+Write-Host '=== 4/7 cordis-integration.test.mjs（仓库源码，真实 cordis 全链路）' -ForegroundColor Cyan
 $r = Invoke-Mjs -Script (Join-Path $repo 'test\cordis-integration.test.mjs')
 Write-Host $r
 if ($r -notmatch 'PASS') { $failures += 'cordis-integration.test.mjs (repo)' }
 
-Write-Host '=== 4/6 real-data.test.mjs（用用户真实记忆数据跑真实渲染）' -ForegroundColor Cyan
+Write-Host '=== 5/7 real-data.test.mjs（用用户真实记忆数据跑真实渲染）' -ForegroundColor Cyan
 $r = Invoke-Mjs -Script (Join-Path $repo 'test\real-data.test.mjs')
 Write-Host $r
 if ($r -notmatch 'PASS') { $failures += 'real-data.test.mjs (repo)' }
 
-Write-Host '=== 5/6 snapshot-resume.test.mjs（已固化快照路径）' -ForegroundColor Cyan
+Write-Host '=== 6/7 snapshot-resume.test.mjs（已固化快照路径）' -ForegroundColor Cyan
 $r = Invoke-Mjs -Script (Join-Path $repo 'test\snapshot-resume.test.mjs')
 Write-Host $r
 if ($r -notmatch 'PASS') { $failures += 'snapshot-resume.test.mjs (repo)' }
 
-Write-Host '=== 6/6 同样几项跑 profile 里已安装的那份' -ForegroundColor Cyan
+Write-Host '=== 7/7 同样几项跑 profile 里已安装的那份' -ForegroundColor Cyan
 if (-not (Test-Path $installed)) {
     Write-Host "跳过：未安装 $installed" -ForegroundColor Yellow
 } else {
     $entry = 'file:///' + (($installed -replace '\\', '/') + '/lib/index.js')
+
+    $env:PERSONA_MEMORY_ENTRY = $entry
+    & $plainNode (Join-Path $repo 'test\fact-limit.test.mjs')
+    if ($LASTEXITCODE -ne 0) { $failures += 'fact-limit.test.mjs (installed)' }
+    Remove-Item Env:PERSONA_MEMORY_ENTRY -ErrorAction SilentlyContinue
+
     $r = Invoke-Mjs -Script (Join-Path $repo 'test\host-interpolate.test.mjs') -Entry $entry
     Write-Host "host-interpolate: $r"
     if ($r -notmatch 'PASS') { $failures += 'host-interpolate.test.mjs (installed)' }
