@@ -23,6 +23,10 @@ export interface Config {
     maxChars: number;
     /** 全局 FACT.md 的行数硬上限（`action=update, scope=global` 与面板写入都受它约束）。 */
     maxFactLines: number;
+    /** 全局 FACT.md 的字节硬上限（UTF-8；与 `maxFactLines` 同时生效，任一超限即拒写）。 */
+    maxFactBytes: number;
+    /** 项目 MEMORY.md 的字符硬上限（`action=update, scope=project` 与面板写入都受它约束）。 */
+    maxProjectChars: number;
     /** 右侧栏面板的 HTTP 前缀。 */
     panelPath: string;
 }

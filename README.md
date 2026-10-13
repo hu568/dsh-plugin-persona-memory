@@ -9,7 +9,7 @@ DSH 的**角色设定 + 长期记忆**管理插件。替换掉 0.1.5 之前那�
 |---|---|
 | 许可证 | MIT，见 [LICENSE](./LICENSE) |
 | 安装规格 | `github:hu568/dsh-plugin-persona-memory` |
-| 实测 DSH | `0.1.5-rc.1` ~ `0.1.7-rc.2` |
+| 实测 DSH | `0.1.5-rc.1` ~ `0.2.0-rc.2` |
 | peer 要求 | `cordis >=4.0.0-rc <5`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/dsh-system-prompt`（随 DSH 提供） |
 | 运行依赖 | `schemastery`（别名安装 `npm:@deepseek-ai/schemastery@3.18.2`，从 npm registry 拉取） |
 
@@ -50,9 +50,9 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 | 平面 | 位置 | 说明 |
 |------|------|------|
 | 角色设定 | `$DSH_HOME/personas/<id>/{persona.yml,SOUL.md,USER.md}` | 角色库，同一时刻一个「当前角色」 |
-| 全局记忆 | `$DSH_HOME/memory/FACT.md` | 跨会话、跨项目的稳定事实；**写入硬上限 100 行** |
+| 全局记忆 | `$DSH_HOME/memory/FACT.md` | 跨会话、跨项目的稳定事实；**写入硬上限 100 行 / 8000 字节** |
 | 长期日志 | `$DSH_HOME/memory/JOURNAL.jsonl` | 一次性事件/会话笔记，仅追加 + 可检索；**不注入提示词** |
-| 项目记忆 | `<项目根>/MEMORY.md` | 随项目走；**存在才注入**，不自动创建 |
+| 项目记忆 | `<项目根>/MEMORY.md` | 随项目走；**存在才注入**，不自动创建；**写入硬上限 8000 字符** |
 | 会话快照 | `$DSH_HOME/memory/snapshots/<sessionId>.json` | 首条消息时固化的注入内容 |
 
 注入的东西（提示词段落，顺序紧贴部署人格之后）：
@@ -95,27 +95,64 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 > 旧 profile 里若写了 `journalEnabled` / `journalInject` / `journalLimit`，删掉即可 ——
 > `schemastery` 对未知键是静默保留不抛错，留着也不会让插件起不来（实测）。
 
-## 全局 FACT.md 的行数硬上限（默认 100）
+## 写入体量硬上限（全局行数 + 字节，项目字符）
+
+三个平面各有闸口，都在**写入侧**卡住（超限**抛错拒绝，不落盘**，绝不静默截断）：
+
+| 文件 | 闸口 | 默认 | 依据 |
+|---|---|---|---|
+| 全局 `FACT.md` | 行数 **AND** 字节（UTF-8） | `100` 行 / `8000` 字节 | 注入**每个主会话**，最坏开销要可预测 |
+| 项目 `MEMORY.md` | 字符 | `8000` 字符 | 与注入侧 `maxChars` 同口径 |
+| 长期日志 `JOURNAL.jsonl` | **无上限**（有意） | — | 不注入提示词，是流水账的去处 |
+
+### 全局 FACT.md：100 行 AND 8000 字节
 
 FACT.md 是**所有项目、所有主会话**都要注入的提示词段落。项目专属结论一旦写进来，
 就变成每个项目、每一轮都要付的固定开销，还会把真正「跨项目稳定」的事实挤出去。
-0.3.0 起在**写入侧**卡住：
+
+只卡行数是**不够的**：行长完全自由 ⇒ 100 行可以写 7 KB，也可以写 20 KB。
+0.4.0 起两个闸口**同时生效**，任一超限即拒写：
 
 | 入口 | 行为 |
 |---|---|
-| `memory action=update, scope=global` | 行数 > `maxFactLines`（默认 100）⇒ **抛错拒绝，不落盘** |
+| `memory action=update, scope=global` | 行数 > `maxFactLines` **或** 字节 > `maxFactBytes` ⇒ **抛错拒绝** |
 | 面板 `POST /api/memory/save`（`scope=global`） | 同一道闸口，避免从面板绕开 |
-| `memory action=update, scope=project` | **不受限** —— 项目记忆本来就该随项目生长 |
-| `memory action=read` | 报告「当前行数 / 上限」，已超限时附警告 |
-| 记忆契约（进提示词） | 事先写明上限，并要求「本工作区的约定 / 机制结论 / 踩坑一律写 `scope=project`」 |
+| `memory action=read` | 报告「当前行数 / 上限，当前字节 / 上限」，已超限时附警告 |
+| 记忆契约（进提示词） | 事先写明双上限，并要求「本工作区的内容一律写 `scope=project`」 |
 
-**为什么报错而不是截断**：`update` 是整篇覆盖语义，静默截断等于悄悄丢用户内容。
-报错文案同时给出「实际行数 / 超出多少 / 该改投 `scope=project` 或 `action=append`」，
-让模型一次就改对，而不是反复重试精简。
+**为什么 8000 字节**：本机实测真实文风约 **75.9 B/行**（4,100 B / 54 行）⇒
+`80 B/行 × 100 行 = 8000 B` 是贴合真实文风、略留余量的取值。满配约 **≈2,560 tokens**
+（实测换算比 0.3205 tok/字节），把最坏情况钉住。
 
-行数统计：`\r\n` 归一化，**末尾换行不算额外一行**（`"a\nb\n"` → 2 行）。
+字节口径：**UTF-8**（中文 3 字节/字），且先做 `\r\n` → `\n` 归一化
+（与 `countLines()` 同口径，不把 `\r` 算进去）。
 
-想放宽就配 `maxFactLines`（`z.number().min(1)`）。
+### 项目 MEMORY.md：8000 字符（补上原本缺失的一侧）
+
+0.4.0 之前这里是**不对称**的：
+
+| 侧 | 0.3.0 行为 |
+|---|---|
+| **注入侧** | 有闸口 —— `maxChars` 默认 8000，超出被 `clip()` **静默截断** |
+| **写入侧** | **完全没有** —— `scope=project` 的 `update` 不校验体量 |
+
+⇒ 「写的时候不拦，读的时候悄悄截断」：文件里会有一大段内容模型**永远看不到**，
+而写入时毫无警示。这正是本插件明确反对的模式（静默截断等于悄悄丢用户内容），
+此前只堵了 global 一侧。0.4.0 补上：
+
+| 入口 | 行为 |
+|---|---|
+| `memory action=update, scope=project` | 字符 > `maxProjectChars`（默认 8000）⇒ **抛错拒绝**，并指向 `action=append` |
+| 面板 `POST /api/memory/save`（`scope=project`） | 同一道闸口 |
+| `memory action=read` | 报告项目记忆的「当前字符 / 上限」，已超限时附警告 |
+| 主会话契约 + 子代理契约 | 都事先写明项目记忆上限 |
+
+单位用**字符**，与注入侧 `maxChars` **逐字同口径**（都取 `trim()` 后的 JS 字符串长度，
+`\r\n` 按 2 个字符算、不做归一化）⇒ 「通过写入闸口」即「必然不会被注入侧截断」，
+边界正好落在 8000 与 8001 之间。中文按字符算（3000 个汉字 = 3000 字符）。
+
+**JOURNAL.jsonl 故意不设上限**：它是无上限增长的流水账、且**不注入提示词**，
+body 不进上下文 ⇒ 加限制只会逼用户丢历史。要写长内容就往这里写。
 
 ## 注入作用域：子代理只拿项目记忆
 
@@ -156,8 +193,8 @@ FACT.md 是**所有项目、所有主会话**都要注入的提示词段落。�
 
 | action | 作用 |
 |--------|------|
-| `read` | 读全局 FACT.md + 当前项目 MEMORY.md + 最近日志 |
-| `update` | 整篇覆盖写入。`scope=global` → FACT.md（**超 100 行直接报错**）；`scope=project` → `<项目根>/MEMORY.md`（不存在则创建，无行数限制） |
+| `read` | 读全局 FACT.md + 当前项目 MEMORY.md + 最近日志（两者都报告「当前体量 / 上限」） |
+| `update` | 整篇覆盖写入。`scope=global` → FACT.md（**超 100 行或 8000 字节直接报错**）；`scope=project` → `<项目根>/MEMORY.md`（不存在则创建，**超 8000 字符直接报错**） |
 | `append` | 向 JOURNAL.jsonl 追加一条 `{ts,tags,text}` |
 | `search` | 按子串（可选 tag）检索日志，新→旧 |
 
@@ -206,6 +243,8 @@ POST /persona-memory/api/journal/{append,search}
 | `subagentProjectOnly` | `true` | 子代理会话只注入项目记忆（关掉＝子代理与主会话一致） |
 | `maxChars` | `8000` | 单文件注入字符上限 |
 | `maxFactLines` | `100` | 全局 FACT.md 的行数硬上限（写入时校验，超限报错） |
+| `maxFactBytes` | `8000` | 全局 FACT.md 的字节硬上限（UTF-8；与 `maxFactLines` 同时生效） |
+| `maxProjectChars` | `8000` | 项目 MEMORY.md 的字符硬上限（写入时校验，超限报错；与 `maxChars` 同口径） |
 | `panelPath` | `/persona-memory` | 面板 HTTP 前缀 |
 
 > 0.2.0 移除了 `journalEnabled` / `journalInject` / `journalLimit` 三个键 ——
@@ -257,9 +296,11 @@ Get-Process | Where-Object ProcessName -match 'DeepSeek' | Select-Object Id,Star
 ## 回归测试
 
 ```powershell
-# 纯 node 那两条
+# 纯 node 那四条
 node test/scope.test.mjs
 node test/fact-limit.test.mjs
+node test/fact-bytes.test.mjs
+node test/project-limit.test.mjs
 # 其余几条（要真实宿主渲染器 / 真实 cordis）用统一入口，会自动跑仓库源码 + 已安装副本
 pwsh -File test/run-all.ps1
 ```
@@ -267,7 +308,9 @@ pwsh -File test/run-all.ps1
 | 测试 | 验什么 |
 |---|---|
 | `scope.test.mjs` | 注入作用域：子代理只拿项目记忆；`subagentProjectOnly` 可回退；**日志段落不存在** |
-| `fact-limit.test.mjs` | **FACT.md 行数硬上限**：上限内通过 / 超 1 行被拒且不落盘 / 项目记忆不受限 / `read` 报告与超限警告 / 契约写明上限 / `maxFactLines` 可配 |
+| `fact-limit.test.mjs` | **FACT.md 行数硬上限**：上限内通过 / 超 1 行被拒且不落盘 / `read` 报告与超限警告 / 契约写明上限 / `maxFactLines` 可配 |
+| `fact-bytes.test.mjs` | **FACT.md 字节硬上限**：行数没超但字节超也被拒 / 恰好 8000 B 通过 / 双超时两项都报 / UTF-8 3 字节每汉字 / `\r\n` 归一化 / 契约写明双上限 / `maxFactBytes` 可配 |
+| `project-limit.test.mjs` | **项目 MEMORY.md 字符硬上限**：超限被拒且不落盘 / 恰好 8000 通过 / **边界不变量：8000 不被截断、8001 被截断** / 报错指向 `action=append` 与 `scope=global` / 中文按字符算 / 主会话与子代理契约都写明上限 / `maxProjectChars` 可配 |
 | `host-interpolate.test.mjs` | 用**真实** `renderPrompt()` 验证 `interpolate: false` 生效；反证「摘掉它就会复现用户的报错」 |
 | `cordis-integration.test.mjs` | 真实 `Context` + 真实 `system-prompt` 全链路（section 注册 → assemble → render） |
 | `snapshot-resume.test.mjs` | 已固化快照的续接路径；旧快照里的 `journal` 字段必须被忽略 |
@@ -291,6 +334,9 @@ pwsh -File test/run-all.ps1
   这是拿 token 换准确率的有意取舍 —— 想要「零漏查」请把稳定结论写进 FACT.md。
 - **历史遗留的超限 FACT.md 不会被自动改写**：`read` 会附警告，其后任何 `scope=global`
   写入都会被拒。要么精简到上限内，要么把项目内容搬去 `scope=project`。
+- **历史遗留的超限项目 MEMORY.md 同样不会被自动改写**：`read` 附警告，其后任何
+  `scope=project` 写入都会被拒。想恢复可写，就得先精简到 `maxProjectChars` 以内
+  （或临时把上限调大）——这是有意的：宁可写不进去，也不要静默截断。
 
 ## 仓库结构与源码
 
@@ -303,6 +349,8 @@ pwsh -File test/run-all.ps1
 | `lib/types/index.d.ts` | 宿主半的类型声明 |
 | `test/scope.test.mjs` | 注入作用域 + 插值安全的回归测试 |
 | `test/fact-limit.test.mjs` | 全局 FACT.md 行数硬上限的回归测试 |
+| `test/fact-bytes.test.mjs` | 全局 FACT.md 字节硬上限的回归测试 |
+| `test/project-limit.test.mjs` | 项目 MEMORY.md 字符硬上限的回归测试 |
 | `skills/persona-creator/SKILL.md` | 随包技能 |
 | `cordis.patch.yml` | 组合包层：把 `persona-memory` 行插进宿主组合 |
 

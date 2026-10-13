@@ -98,9 +98,11 @@ assert.match(readFileSync(join(projectRoot, 'MEMORY.md'), 'utf8'), /项目行 50
 /* ── 5) read 报告行数/上限，并在已超限时警告 ── */
 const readOk = await run({ action: 'read' });
 assert.match(readOk.text, /100 行 \/ 上限 100 行/, 'read 应报告当前行数与上限');
+assert.match(readOk.text, /\/ 上限 8000 字节/, 'read 应同时报告字节数与字节上限');
 writeFileSync(factPath, `${lines(120, '行')}\n`, 'utf8');
 const readOver = await run({ action: 'read' });
-assert.match(readOver.text, /超出上限 20 行/, 'read 应在已超限时警告');
+assert.match(readOver.text, /已超限/, 'read 应在已超限时警告');
+assert.match(readOver.text, /120 行/, '警告应写明实际行数');
 assert.match(readOver.text, /写入会被拒绝/, '警告应说明后续写入会被拒');
 
 /* ── 6) 契约文案事先声明上限 ── */
@@ -109,7 +111,7 @@ assert.ok(factsSection, '应注册 memory:facts 段落');
 const agent = { id: 'fact-limit-root', session: { header: { cwd: projectRoot }, events: [{ type: 'user/message' }] } };
 const rendered = factsSection.text({ agent });
 assert.ok(rendered.length > 0, '记忆段落应渲染出内容（渲染异常会被插件吞成空串）');
-assert.match(rendered, /硬上限 100 行/, '记忆契约里应写明 FACT.md 的上限');
+assert.match(rendered, /硬上限 100 行 AND 8000 字节/, '记忆契约里应写明 FACT.md 的行数与字节双上限');
 
 /* ── 7) 上限可配置 ── */
 tools.clear();
