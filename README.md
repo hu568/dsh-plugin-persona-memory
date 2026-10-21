@@ -226,15 +226,57 @@ body 不进上下文 ⇒ 加限制只会逼用户丢历史。要写长内容就�
 - 发现通路：`persona` 工具的描述里写着「角色管理请走 `$DSH_HOME\personas`」⇒ 模型顺指针进角色库 ⇒
   读 `personas/README.md` ⇒ 找到本技能文件。
 
-## 右侧栏面板
+## 右侧栏面板（0.5.0 视觉重做）
 
 「角色 / 记忆」标签页（会话标题右侧的「角色」按钮打开）：
 
-- **角色**：列表、切换当前角色、编辑 name/description/SOUL.md/USER.md、新建、删除
+- **角色**：列表、切换当前角色、编辑 name/description/SOUL.md/USER.md、新建、删除；角色数 > 4 时出现筛选框，卡片右侧可上移 / 下移排序
 - **记忆**：全局 FACT.md 编辑；项目 MEMORY.md 编辑（按本进程见过会话的 cwd 发现的项目）
-- **日志**：最近条目、追加、检索
+- **日志**：最近条目、追加、检索（标签可点即搜）
 
-面板走宿主注册的 HTTP 路由（前缀 `/persona-memory`，`config.panelPath` 可改）：
+### 视觉：一份注入的样式表，不再堆内联 style
+
+| | 0.4.x（内联 style 对象） | 0.5.0（注入样式表） |
+|---|---|---|
+| 载体 | 每个元素一个 `style={{…}}` | 一张注入 `<head>` 的表，`id="dsh-persona-memory-panel-style"` |
+| 类名 | 无 | 面板内一律 `.dpm-*` 前缀 |
+| hover / focus / transition / 伪元素 | 写不了 | 都能写 ⇒ 悬停高亮、`focus-visible` 焦点环、进度动画、`prefers-reduced-motion` 降级 |
+| 主题适配 | `var(--dsh-*)` + 兜底值 | `color-mix(in srgb, currentColor N%, transparent)` 推中性色 |
+
+主题色只继承**当前文字色**，不指望宿主变量：实测 `--dsh-border` / `--dsh-accent` / `--dsw-*` 在面板作用域内
+取值为空，`var(--dsh-accent)` 等于没写。`color-mix()` 自带 `@supports not (…)` 兜底（老内核退回 rgba）。
+
+### 新增交互
+
+- **角色排序**：角色卡右侧的上移 / 下移按钮，走既有的 `POST /api/persona/order`，把顺序写进
+  `$DSH_HOME/personas/.personas-order`；没进排序文件的角色按名称排到最后。
+- **计量条**：FACT.md 两条（行数 / 字节 UTF-8）、项目 MEMORY.md 一条（字符）；接近上限变琥珀、超限变红。
+  上限默认 `100 行 / 8000 字节 / 8000 字符`，口径与宿主写入闸口**逐字一致**（先 `\r\n` 归一化再计行与
+  字节，字符按 `trim()` 后的长度、不做归一化）⇒ 条变红就等于这一笔会被拒写。
+  - 面板按这三个默认值显示：把 `config.maxFactLines` 之类的上限改小后，条上的分母仍是默认值
+    （宿主还没在 `state` 里下发 `limits`）。
+- **未保存徽标 + 撤销改动**：角色 / FACT / 项目三处编辑区改动后显示「未保存」，保存按钮同步点亮；
+  FACT 另有「撤销改动」回到磁盘版。切换角色或切换项目时若还有未保存改动，会先 `confirm` 问一句。
+- **快捷键**：`Ctrl/Cmd+S` 保存当前标签页正在编辑的内容（角色页保存当前角色；记忆页把 FACT 与项目
+  MEMORY.md 一起保存）；日志输入框里 `Ctrl/Cmd+Enter` 追加一条。
+- **标签点击即检索**：日志条目上的 `#tag` 是按钮，点它就用该 tag 检索；「清除」回到最近条目。
+- **错误 toast**：读写出错时顶部显示可关闭的红色提示条（不自动消失，留给人读）；成功提示 4 秒自动收。
+- **打开按钮不静默**：头部「角色」按钮在右栏座位还没挂载时会自己重试 8 次，最终失败把原因写进
+  `title` 并把按钮变红，而不是变成一个点了没反应的死按钮。
+
+### 样式热更新：只在整页刷新后生效（重要）
+
+`mountStyles()` 对同一页面是**幂等**的：`document.getElementById('dsh-persona-memory-panel-style')`
+一旦存在就直接返回。这是故意的（重载若先卸后挂，会把新表一并带走），代价是——
+
+> **在同一页面里重载客户端插件，看不到新 CSS**：旧 `<style>` 还在，新表被幂等跳过。
+> 验收视觉改动请**整页刷新（Ctrl+R）**或重启 DSH；急着比对也可以先手工删掉那个
+> `<style id="dsh-persona-memory-panel-style">` 再重载。
+
+面板走宿主注册的 HTTP 路由。前缀由 `config.panelPath` 决定，默认 `/persona-memory`：
+
+> ⚠️ **客户端半把默认前缀写死**（`lib/client.js` 里的 `BASE`）。改 `config.panelPath` 而不动客户端，
+> 面板会一直 404 —— 要么别改，要么两半一起改。
 
 ```
 GET  /persona-memory/api/state
