@@ -206,10 +206,25 @@ body 不进上下文 ⇒ 加限制只会逼用户丢历史。要写长内容就�
 | `use` | 切换当前角色（新会话生效） |
 | `create` / `update` / `delete` | 新建 / 改 / 删角色（当前角色不允许直接删） |
 
-## 技能
+## 技能：persona-creator
 
-随包发布 `persona-creator`：按访谈流程把一个角色写成三件套，含质量检查清单。
-用户说「给我创建个角色 / 新建角色 / 写个人设」时触发。
+`persona-creator`（按访谈流程把一个角色写成三件套 + 质量检查清单）**不作为技能注册**，
+而是作为**物料安装到角色库**——角色库是模型和人都能看到的地方，指针写在 `personas/README.md`：
+
+```
+仓库  skills/persona-creator/SKILL.md                        # 正本，在 git 里维护
+          │  安装 = 拷过去（一次性步骤，见下）
+          ▼
+角色库 $DSH_HOME/personas/skills/persona-creator/SKILL.md
+       $DSH_HOME/personas/README.md                          # 以相对路径 skills/persona-creator/SKILL.md 指向它
+```
+
+- **安装（一次性，随版本手动同步）**：
+  `Copy-Item skills\persona-creator\SKILL.md $env:USERPROFILE\.dsh\personas\skills\persona-creator\SKILL.md`
+- 本包**不注册**该技能；`package.json` 的 `files` 也**不含 `skills`**——正本只在仓库，不进 tarball，
+  所以磁盘上只有「仓库源码」和「角色库」两份（`lib/index.js` 里那段 register 已删，勿再加回）。
+- 发现通路：`persona` 工具的描述里写着「角色管理请走 `$DSH_HOME\personas`」⇒ 模型顺指针进角色库 ⇒
+  读 `personas/README.md` ⇒ 找到本技能文件。
 
 ## 右侧栏面板
 
@@ -351,11 +366,11 @@ pwsh -File test/run-all.ps1
 | `test/fact-limit.test.mjs` | 全局 FACT.md 行数硬上限的回归测试 |
 | `test/fact-bytes.test.mjs` | 全局 FACT.md 字节硬上限的回归测试 |
 | `test/project-limit.test.mjs` | 项目 MEMORY.md 字符硬上限的回归测试 |
-| `skills/persona-creator/SKILL.md` | 随包技能 |
+| `skills/persona-creator/SKILL.md` | 角色创建流程**正本**（装到角色库用，**不随包发布**，见「技能」） |
 | `cordis.patch.yml` | 组合包层：把 `persona-memory` 行插进宿主组合 |
 
-`lib/index.js.map` 是编译期留下的 sourcemap；对应的 TypeScript 原稿不在本仓库内，
-修改请直接改 `lib/*.js`。改完重启 DSH（或热重载该包）即生效。
+`lib/` 下的 JS **就是源码**（0.4.1 起不再带 `lib/index.js.map`——它是编译期残留，对应的 TypeScript
+原稿并不在本仓库内，留着只会与源码不同步）。修改直接改 `lib/*.js`，改完重启 DSH 即生效。
 
 ## 协议
 
