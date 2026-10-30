@@ -1,7 +1,7 @@
 {
   "name": "@dsh-external/dsh-persona-memory",
-  "version": "0.5.0",
-  "description": "DSH 角色设定与长期记忆：角色库（persona.yml + SOUL.md + USER.md）、全局/项目两级记忆（FACT.md / MEMORY.md）、可检索的长期日志 JOURNAL.jsonl（不注入提示词，按需 search）；首条消息快照注入，对所有 agent 预设生效，附右侧栏管理面板",
+  "version": "0.6.1",
+  "description": "DSH 角色设定与长期记忆：角色库（persona.yml + SOUL.md + USER.md）、全局/项目两级记忆（FACT.md / MEMORY.md）、可检索的长期日志 JOURNAL.jsonl（不注入提示词，按需 search）；首条消息快照注入，对所有 agent 预设生效，附右侧栏管理面板与设置页「记忆」注入开关（可扩展的设置项注册表）",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",

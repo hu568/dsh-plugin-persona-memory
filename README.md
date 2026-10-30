@@ -1,282 +1,81 @@
 # @dsh-external/dsh-persona-memory
 
-DSH 的**角色设定 + 长期记忆**管理插件。替换掉 0.1.5 之前那套「预设级记忆加载器」
-（`memory` / `memory-boot` / `ptc-memory` 三个 agent 预设 + `router-standard` 内嵌的
-`memory-loader`）——那些只在选中对应预设时才注入，新方案注册在**宿主组合**里，
-对**所有 agent 预设**的每个会话生效。
+DSH 的**角色设定 + 长期记忆**管理插件，注册在**宿主组合**里，对所有 agent 预设的每个会话生效。
 
 | | |
 |---|---|
 | 许可证 | MIT，见 [LICENSE](./LICENSE) |
 | 安装规格 | `github:hu568/dsh-plugin-persona-memory` |
 | 实测 DSH | `0.1.5-rc.1` ~ `0.2.0-rc.2` |
-| peer 要求 | `cordis >=4.0.0-rc <5`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/dsh-system-prompt`（随 DSH 提供） |
-| 运行依赖 | `schemastery`（别名安装 `npm:@deepseek-ai/schemastery@3.18.2`，从 npm registry 拉取） |
+| peer 要求 | `cordis >=4.0.0-rc <5`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/dsh-system-prompt` |
+| 运行依赖 | `schemastery`（别名安装 `npm:@deepseek-ai/schemastery@3.18.2`） |
 
-## 安装
+## 安装 / 卸载
 
 ```powershell
-# DSH 内置插件管理器（创造模式）：
-#   plugin_manager  action=install_bundle  target="github:hu568/dsh-plugin-persona-memory"
-
-# 或命令行。桌面端（Electron）profile 由应用独占管理，请改用插件管理器或「设置 → 插件」：
+# 插件管理器（创造模式）：plugin_manager action=install_bundle target="github:hu568/dsh-plugin-persona-memory"
+# 或命令行（桌面端请用插件管理器或「设置 → 插件」）：
 dsh plugin --profile <profile> add github:hu568/dsh-plugin-persona-memory
-```
-
-安装后本包被追加进 profile 的 `dsh.profile.bundles`，其 `cordis.patch.yml` 作为组合包层
-把 `persona-memory` 这一行插进**宿主组合**。profile 在运行中通常即时生效，否则重启一次 DSH。
-
-验证：
-
-```powershell
-dsh --profile <profile> --dump-config     # 应出现以本包名为标题的层与 persona-memory 行
-```
-
-也可以在 agent 里直接 `GET /persona-memory/api/state`：返回 `200` + `ok: true` 说明面板路由已注册。
-
-卸载：
-
-```powershell
+dsh --profile <profile> --dump-config     # 验证：应出现以本包名为标题的层与 persona-memory 行
 dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 ```
 
-卸载不会删除角色库与记忆文件（`$DSH_HOME/personas`、`$DSH_HOME/memory`），需要时手动清理。
+卸载不删除 `$DSH_HOME/personas`、`$DSH_HOME/memory`。更新时若安装规格字符串不变会报 `ambiguous-install`，先 `remove` 再 `add`。
 
-> **更新时注意**：DSH 通过 profile 依赖差分识别「这次装的是哪个包」。若内容变了但安装规格字符串
-> 没变，会报 `ambiguous-install`；请先 `remove` 再 `add`，或让版本号/文件名变化。
-
-## 它解决什么
+## 数据平面
 
 | 平面 | 位置 | 说明 |
 |------|------|------|
-| 角色设定 | `$DSH_HOME/personas/<id>/{persona.yml,SOUL.md,USER.md}` | 角色库，同一时刻一个「当前角色」 |
-| 全局记忆 | `$DSH_HOME/memory/FACT.md` | 跨会话、跨项目的稳定事实；**写入硬上限 100 行 / 8000 字节** |
-| 长期日志 | `$DSH_HOME/memory/JOURNAL.jsonl` | 一次性事件/会话笔记，仅追加 + 可检索；**不注入提示词** |
-| 项目记忆 | `<项目根>/MEMORY.md` | 随项目走；**存在才注入**，不自动创建；**写入硬上限 8000 字符** |
-| 会话快照 | `$DSH_HOME/memory/snapshots/<sessionId>.json` | 首条消息时固化的注入内容 |
+| 角色设定 | `$DSH_HOME/personas/<id>/{persona.yml,SOUL.md,USER.md}` | 同一时刻一个当前角色 |
+| 全局记忆 | `$DSH_HOME/memory/FACT.md` | 跨会话稳定事实；上限 100 行 / 8000 字节 |
+| 长期日志 | `$DSH_HOME/memory/JOURNAL.jsonl` | 仅追加 + 可检索；不注入提示词，无上限 |
+| 项目记忆 | `<项目根>/MEMORY.md` | 存在才注入；上限 8000 字符 |
+| 注入开关 | `$DSH_HOME/memory/injection.json` | 设置页三个开关的覆盖层；文件不在就用组合配置的默认值 |
+| 会话快照 | `$DSH_HOME/memory/snapshots/<sessionId>.json` | 首条消息时固化 |
 
-注入的东西（提示词段落，顺序紧贴部署人格之后）：
+## 注入内容与作用域
 
-- `memory:soul` → `<soul persona="…" id="…">` + 角色编辑契约
-- `memory:user` → `<user persona="…">`
-- `memory:facts` → `<memory>` 全局 + 项目 + 记忆写入契约
-
-> **段落名为什么用 `memory:` 前缀**：用户自建的 `router-standard` 预设会在精简模式里
-> 剥掉除 `memory:*` 外的全部段落。沿用这个前缀，角色与记忆在那种模式下也能存活，
-> 不需要改预设里的剥离逻辑。
-
-> **为什么都设 `interpolate: false`**：宿主 `@deepseek-ai/dsh-system-prompt` 的
-> `renderPrompt()` 会对未标记的段落做 `{{变量}}` 插值，而 `interpolate()` 对
-> **未注册的名字是抛错**（不是原样保留）——它认为「malformed prompt 比响亮地失败更糟」。
-> 本插件的段落内容全是用户可写的自由文本（FACT.md、SOUL.md…），
-> 只要哪篇记忆里写了一句 `{{变量}}`，整个 turn 就会以
-> `malformed prompt variable reference "{{变量}}" in section "memory:facts"` 失败。
-> 因此这些段落一律 `interpolate: false`：**内容原样进提示词，`{{…}}` 不再有特殊含义**。
-
-## 长期日志：不注入，只按需检索
-
-`JOURNAL.jsonl` 是**无上限增长**的流水账。0.1.x 曾把最近 6 条注入 `<journal>` 段落，
-0.2.0 起**整段移除**，代价与收益：
-
-| | 0.1.x（注入最近 6 条） | 0.2.0（不注入） |
-|---|---|---|
-| 每轮 token | 每轮都为最近 6 条付费，随文件增长 | 0（快照里也不存了） |
-| 内容相关性 | 最近几条常常与当前任务无关 | 由模型自己判断要不要查 |
-| 快照体积 | 随日志增长 | 恒定 |
-| 取旧笔记 | 自动到手 | 要模型主动 `memory action=search` |
-
-**不至于「忘了自己有历史」**：记忆契约里留了一行指针，写明日志有多少条、正文未注入，
-并明确要求模型在觉得「以前可能聊过 / 踩过坑」时主动 `action=search`。子代理契约里也有一行。
-
-日志的**写与读能力完全保留**：`memory` 工具的 `append` / `search` / `read`、
-面板的「日志」标签页、`/api/journal/{append,search}` 路由都照旧可用。
-变的只是「不再自动灌进上下文」。
-
-> 旧 profile 里若写了 `journalEnabled` / `journalInject` / `journalLimit`，删掉即可 ——
-> `schemastery` 对未知键是静默保留不抛错，留着也不会让插件起不来（实测）。
-
-## 写入体量硬上限（全局行数 + 字节，项目字符）
-
-三个平面各有闸口，都在**写入侧**卡住（超限**抛错拒绝，不落盘**，绝不静默截断）：
-
-| 文件 | 闸口 | 默认 | 依据 |
-|---|---|---|---|
-| 全局 `FACT.md` | 行数 **AND** 字节（UTF-8） | `100` 行 / `8000` 字节 | 注入**每个主会话**，最坏开销要可预测 |
-| 项目 `MEMORY.md` | 字符 | `8000` 字符 | 与注入侧 `maxChars` 同口径 |
-| 长期日志 `JOURNAL.jsonl` | **无上限**（有意） | — | 不注入提示词，是流水账的去处 |
-
-### 全局 FACT.md：100 行 AND 8000 字节
-
-FACT.md 是**所有项目、所有主会话**都要注入的提示词段落。项目专属结论一旦写进来，
-就变成每个项目、每一轮都要付的固定开销，还会把真正「跨项目稳定」的事实挤出去。
-
-只卡行数是**不够的**：行长完全自由 ⇒ 100 行可以写 7 KB，也可以写 20 KB。
-0.4.0 起两个闸口**同时生效**，任一超限即拒写：
-
-| 入口 | 行为 |
-|---|---|
-| `memory action=update, scope=global` | 行数 > `maxFactLines` **或** 字节 > `maxFactBytes` ⇒ **抛错拒绝** |
-| 面板 `POST /api/memory/save`（`scope=global`） | 同一道闸口，避免从面板绕开 |
-| `memory action=read` | 报告「当前行数 / 上限，当前字节 / 上限」，已超限时附警告 |
-| 记忆契约（进提示词） | 事先写明双上限，并要求「本工作区的内容一律写 `scope=project`」 |
-
-**为什么 8000 字节**：本机实测真实文风约 **75.9 B/行**（4,100 B / 54 行）⇒
-`80 B/行 × 100 行 = 8000 B` 是贴合真实文风、略留余量的取值。满配约 **≈2,560 tokens**
-（实测换算比 0.3205 tok/字节），把最坏情况钉住。
-
-字节口径：**UTF-8**（中文 3 字节/字），且先做 `\r\n` → `\n` 归一化
-（与 `countLines()` 同口径，不把 `\r` 算进去）。
-
-### 项目 MEMORY.md：8000 字符（补上原本缺失的一侧）
-
-0.4.0 之前这里是**不对称**的：
-
-| 侧 | 0.3.0 行为 |
-|---|---|
-| **注入侧** | 有闸口 —— `maxChars` 默认 8000，超出被 `clip()` **静默截断** |
-| **写入侧** | **完全没有** —— `scope=project` 的 `update` 不校验体量 |
-
-⇒ 「写的时候不拦，读的时候悄悄截断」：文件里会有一大段内容模型**永远看不到**，
-而写入时毫无警示。这正是本插件明确反对的模式（静默截断等于悄悄丢用户内容），
-此前只堵了 global 一侧。0.4.0 补上：
-
-| 入口 | 行为 |
-|---|---|
-| `memory action=update, scope=project` | 字符 > `maxProjectChars`（默认 8000）⇒ **抛错拒绝**，并指向 `action=append` |
-| 面板 `POST /api/memory/save`（`scope=project`） | 同一道闸口 |
-| `memory action=read` | 报告项目记忆的「当前字符 / 上限」，已超限时附警告 |
-| 主会话契约 + 子代理契约 | 都事先写明项目记忆上限 |
-
-单位用**字符**，与注入侧 `maxChars` **逐字同口径**（都取 `trim()` 后的 JS 字符串长度，
-`\r\n` 按 2 个字符算、不做归一化）⇒ 「通过写入闸口」即「必然不会被注入侧截断」，
-边界正好落在 8000 与 8001 之间。中文按字符算（3000 个汉字 = 3000 字符）。
-
-**JOURNAL.jsonl 故意不设上限**：它是无上限增长的流水账、且**不注入提示词**，
-body 不进上下文 ⇒ 加限制只会逼用户丢历史。要写长内容就往这里写。
-
-## 注入作用域：子代理只拿项目记忆
+提示词段落紧贴部署人格之后：`memory:soul`（`<soul>` + 编辑契约）、`memory:user`（`<user>`）、`memory:facts`（`<memory>` 全局 + 项目 + 写入契约）。
 
 | 段落 | 主会话 | 子代理会话 |
 |---|---|---|
-| `memory:soul` / `memory:user`（角色） | ✅ | ❌ 不注入 |
-| `memory:facts` → 全局 FACT.md | ✅ | ❌ 不注入 |
-| `memory:facts` → 项目 MEMORY.md | ✅ | ✅ 注入 |
-| 长期日志 JOURNAL.jsonl | ❌ 一律不注入（0.2.0 起） | ❌ |
+| 角色 soul / user | ✅ | ❌ |
+| 全局 FACT.md | ✅ | ❌ |
+| 项目 MEMORY.md | ✅ | ✅ |
+| JOURNAL.jsonl | ❌ | ❌ |
 
-理由：子代理拿到的是一份**具体委派任务**。角色人设、跨项目全局事实、历史流水账
-都与该任务无关，灌进去只会让子代理的上下文变宽、更容易跑偏；项目记忆才是它需要的
-那部分（本仓库/本项目的约定与事实）。
+子代理只拿项目记忆与项目版写入契约，可只读 `action=read` / `action=search` 查全局记忆；`subagentProjectOnly: false` 可回退为主会话一致。子代理判定读 `session.header`：`origin === 'subagent'`、`parentSession` 存在或 `delegationDepth > 0`。日志不注入，但契约里留指针（条数 + 正文未注入 + 要求主动 search）。
 
-判定「是不是子代理」读的是宿主真实写入的 `session.header`：`origin === 'subagent'`
-优先，另外 `parentSession` 存在或 `delegationDepth > 0` 也认（兼容只写血缘的旧日志
-与外部 provider）。宁可判多，也不要漏判后把主会话的角色灌进委派任务。
+## 写入硬上限（超限抛错拒绝，不落盘）
 
-子代理只注入项目记忆时，写入契约也换成项目版：明确告诉它「全局记忆与角色未注入」，
-并允许它**只读**地 `action=read` / `action=search` 去查全局记忆，而不是以为不存在。
+| 文件 | 闸口 | 默认 |
+|---|---|---|
+| 全局 `FACT.md` | 行数 AND 字节（UTF-8） | 100 行 / 8000 字节 |
+| 项目 `MEMORY.md` | 字符（`trim()` 后长度，与注入侧 `maxChars` 同口径） | 8000 字符 |
+| `JOURNAL.jsonl` | 无上限（有意） | — |
 
-想恢复旧行为（子代理与主会话注入完全相同）就设 `subagentProjectOnly: false`。
+FACT.md 字节先做 `\r\n` → `\n` 归一化，与 `countLines()` 同口径。`memory action=read` 报告当前体量/上限并附超限警告；面板保存走同一道闸口。
 
-## 注入时机：首条消息快照冻结
+## 注入时机
 
-- **首条用户消息之前**：每轮组装直接读盘 → 「先建会话 → 改角色/记忆 → 再发第一条消息」拿到最新内容。
-- **首条用户消息之后**：把角色 + 记忆固化成本会话快照（内存 + 落盘），此后每轮读快照。
-  于是 KV 缓存前缀绝对稳定，会话中途改文件不影响它，**新会话**才看到更新。
-  快照里**不含**日志正文（0.2.0 起），只留一个 `journalTotal` 计数供契约措辞使用。
-- 子代理会话的快照只留内存、不落盘（防止 `snapshots/` 随委派次数膨胀）。
-- 快照落盘让 resume / 进程重启后语义不变。
+首条用户消息前每轮读盘；首条消息后固化成本会话快照（内存 + 落盘），此后读快照，KV 缓存前缀稳定。快照不含日志正文，只留 `journalTotal` 计数。子代理快照只留内存。resume / 重启语义不变。
 
 ## 工具
 
-两个工具都是**全局注册**，没有路径参数，走进程内 `node:fs`（不受文件沙箱策略影响）：
+- `memory`：`read`（全局 + 项目 + 最近日志，报告体量/上限）、`update`（整篇覆盖，`scope=global|project`，超限报错）、`append`（追加 `{ts,tags,text}`）、`search`（子串 + 可选 tag，新→旧）。
+- `persona`：`list` / `current` / `show` / `use`（新会话生效）/ `create` / `update` / `delete`（当前角色不可删）。
 
-### `memory`
+均全局注册、无路径参数，走进程内 `node:fs`。
 
-| action | 作用 |
-|--------|------|
-| `read` | 读全局 FACT.md + 当前项目 MEMORY.md + 最近日志（两者都报告「当前体量 / 上限」） |
-| `update` | 整篇覆盖写入。`scope=global` → FACT.md（**超 100 行或 8000 字节直接报错**）；`scope=project` → `<项目根>/MEMORY.md`（不存在则创建，**超 8000 字符直接报错**） |
-| `append` | 向 JOURNAL.jsonl 追加一条 `{ts,tags,text}` |
-| `search` | 按子串（可选 tag）检索日志，新→旧 |
+## 面板
 
-### `persona`
+右侧栏「角色 / 记忆」标签页，HTTP 前缀由 `config.panelPath` 决定（默认 `/persona-memory`；客户端 `BASE` 写死，改前缀需两半同改）。
 
-| action | 作用 |
-|--------|------|
-| `list` / `current` / `show` | 列角色 / 看当前角色 / 读某角色三件套 |
-| `use` | 切换当前角色（新会话生效） |
-| `create` / `update` / `delete` | 新建 / 改 / 删角色（当前角色不允许直接删） |
-
-## 技能：persona-creator
-
-`persona-creator`（按访谈流程把一个角色写成三件套 + 质量检查清单）**不作为技能注册**，
-而是作为**物料安装到角色库**——角色库是模型和人都能看到的地方，指针写在 `personas/README.md`：
-
-```
-仓库  skills/persona-creator/SKILL.md                        # 正本，在 git 里维护
-          │  安装 = 拷过去（一次性步骤，见下）
-          ▼
-角色库 $DSH_HOME/personas/skills/persona-creator/SKILL.md
-       $DSH_HOME/personas/README.md                          # 以相对路径 skills/persona-creator/SKILL.md 指向它
-```
-
-- **安装（一次性，随版本手动同步）**：
-  `Copy-Item skills\persona-creator\SKILL.md $env:USERPROFILE\.dsh\personas\skills\persona-creator\SKILL.md`
-- 本包**不注册**该技能；`package.json` 的 `files` 也**不含 `skills`**——正本只在仓库，不进 tarball，
-  所以磁盘上只有「仓库源码」和「角色库」两份（`lib/index.js` 里那段 register 已删，勿再加回）。
-- 发现通路：`persona` 工具的描述里写着「角色管理请走 `$DSH_HOME\personas`」⇒ 模型顺指针进角色库 ⇒
-  读 `personas/README.md` ⇒ 找到本技能文件。
-
-## 右侧栏面板（0.5.0 视觉重做）
-
-「角色 / 记忆」标签页（会话标题右侧的「角色」按钮打开）：
-
-- **角色**：列表、切换当前角色、编辑 name/description/SOUL.md/USER.md、新建、删除；角色数 > 4 时出现筛选框，卡片右侧可上移 / 下移排序
-- **记忆**：全局 FACT.md 编辑；项目 MEMORY.md 编辑（按本进程见过会话的 cwd 发现的项目）
-- **日志**：最近条目、追加、检索（标签可点即搜）
-
-### 视觉：一份注入的样式表，不再堆内联 style
-
-| | 0.4.x（内联 style 对象） | 0.5.0（注入样式表） |
-|---|---|---|
-| 载体 | 每个元素一个 `style={{…}}` | 一张注入 `<head>` 的表，`id="dsh-persona-memory-panel-style"` |
-| 类名 | 无 | 面板内一律 `.dpm-*` 前缀 |
-| hover / focus / transition / 伪元素 | 写不了 | 都能写 ⇒ 悬停高亮、`focus-visible` 焦点环、进度动画、`prefers-reduced-motion` 降级 |
-| 主题适配 | `var(--dsh-*)` + 兜底值 | `color-mix(in srgb, currentColor N%, transparent)` 推中性色 |
-
-主题色只继承**当前文字色**，不指望宿主变量：实测 `--dsh-border` / `--dsh-accent` / `--dsw-*` 在面板作用域内
-取值为空，`var(--dsh-accent)` 等于没写。`color-mix()` 自带 `@supports not (…)` 兜底（老内核退回 rgba）。
-
-### 新增交互
-
-- **角色排序**：角色卡右侧的上移 / 下移按钮，走既有的 `POST /api/persona/order`，把顺序写进
-  `$DSH_HOME/personas/.personas-order`；没进排序文件的角色按名称排到最后。
-- **计量条**：FACT.md 两条（行数 / 字节 UTF-8）、项目 MEMORY.md 一条（字符）；接近上限变琥珀、超限变红。
-  上限默认 `100 行 / 8000 字节 / 8000 字符`，口径与宿主写入闸口**逐字一致**（先 `\r\n` 归一化再计行与
-  字节，字符按 `trim()` 后的长度、不做归一化）⇒ 条变红就等于这一笔会被拒写。
-  - 面板按这三个默认值显示：把 `config.maxFactLines` 之类的上限改小后，条上的分母仍是默认值
-    （宿主还没在 `state` 里下发 `limits`）。
-- **未保存徽标 + 撤销改动**：角色 / FACT / 项目三处编辑区改动后显示「未保存」，保存按钮同步点亮；
-  FACT 另有「撤销改动」回到磁盘版。切换角色或切换项目时若还有未保存改动，会先 `confirm` 问一句。
-- **快捷键**：`Ctrl/Cmd+S` 保存当前标签页正在编辑的内容（角色页保存当前角色；记忆页把 FACT 与项目
-  MEMORY.md 一起保存）；日志输入框里 `Ctrl/Cmd+Enter` 追加一条。
-- **标签点击即检索**：日志条目上的 `#tag` 是按钮，点它就用该 tag 检索；「清除」回到最近条目。
-- **错误 toast**：读写出错时顶部显示可关闭的红色提示条（不自动消失，留给人读）；成功提示 4 秒自动收。
-- **打开按钮不静默**：头部「角色」按钮在右栏座位还没挂载时会自己重试 8 次，最终失败把原因写进
-  `title` 并把按钮变红，而不是变成一个点了没反应的死按钮。
-
-### 样式热更新：只在整页刷新后生效（重要）
-
-`mountStyles()` 对同一页面是**幂等**的：`document.getElementById('dsh-persona-memory-panel-style')`
-一旦存在就直接返回。这是故意的（重载若先卸后挂，会把新表一并带走），代价是——
-
-> **在同一页面里重载客户端插件，看不到新 CSS**：旧 `<style>` 还在，新表被幂等跳过。
-> 验收视觉改动请**整页刷新（Ctrl+R）**或重启 DSH；急着比对也可以先手工删掉那个
-> `<style id="dsh-persona-memory-panel-style">` 再重载。
-
-面板走宿主注册的 HTTP 路由。前缀由 `config.panelPath` 决定，默认 `/persona-memory`：
-
-> ⚠️ **客户端半把默认前缀写死**（`lib/client.js` 里的 `BASE`）。改 `config.panelPath` 而不动客户端，
-> 面板会一直 404 —— 要么别改，要么两半一起改。
+- **角色**：列表、切换、编辑 name/description/SOUL/USER、新建、删除；>4 个时出现筛选；卡片上移/下移排序（写 `personas/.personas-order`）。
+- **记忆**：全局 FACT.md、项目 MEMORY.md 编辑。
+- **日志**：最近条目、追加、检索（点 `#tag` 即搜）。
+- **交互**：计量条（行数/字节/字符，接近上限变琥珀、超限变红，分母为默认值）、未保存徽标 + 撤销、`Ctrl/Cmd+S` 保存、`Ctrl/Cmd+Enter` 追加、错误 toast。
+- **样式**：注入一张 `<style id="dsh-persona-memory-panel-style">`，类名 `.dpm-*`；同页面重载不刷新 CSS，验收请整页刷新。
 
 ```
 GET  /persona-memory/api/state
@@ -285,135 +84,114 @@ POST /persona-memory/api/memory/save
 POST /persona-memory/api/journal/{append,search}
 ```
 
-> **实现注记**：取 `webServer` 服务时不能只用裸 `ctx.get('webServer')`。宿主 webserver 的
-> fiber 要等 socket 绑定完成才 ACTIVE，而 cordis 的 `ctx.get()` 默认 `strict=true`（只认 ACTIVE
-> 的服务），加上 Loader 并行启动 entry，插件 `apply` 常常早于它就绪，此时那个判空会静默跳过 ⇒
-> 面板路由一条都不注册 ⇒ 面板永远 HTTP 404。本包的做法：拿不到就挂作用域
-> `ctx.inject(['webServer'], …)` 等就绪后补注册。
+取 `webServer` 用 `ctx.inject(['webServer'], …)` 等就绪后补注册，不用裸 `ctx.get()`（fiber 未 ACTIVE 会静默跳过导致 404）。
+
+## 设置页：记忆功能管理
+
+DSH「设置」里多一个 **记忆** 页（`settings.section`，id `persona-memory`），一行一个开关：
+
+| 开关 | 控制 |
+|---|---|
+| 角色设定 | `memory:soul` / `memory:user` 两段 |
+| 全局记忆 | `memory:facts` 里的 `FACT.md` 部分与全局写入契约 |
+| 项目记忆 | `memory:facts` 里的项目 `MEMORY.md` 部分与项目写入契约（子代理也只看这个开关） |
+
+开关写进 `$DSH_HOME/memory/injection.json`（只存用户显式设过的布尔键），**覆盖**组合配置里的 `personaEnabled` / `memoryEnabled`；删掉文件即回到组合默认值。开关在**当前会话的下一轮**就生效——快照冻结的是角色/记忆正文，不冻结开关；正文编辑仍是新会话生效。
+
+附属插件注册的分组按**项数折叠**：超过 3 项默认收起，只显示「分组名 + 项数」，点标题展开；3 项以内保持展开。这样附属插件可以注册完整参数（例如自动召回的 10 项），页面不会被撑长。
+
+### 给附属插件：注册设置项
+
+宿主半提供 `ctx.personaMemory`（`ctx.get('personaMemory')` 或 `ctx.inject(['personaMemory'], …)`）：
+
+```js
+const handle = ctx.personaMemory.settings.register({
+  id: 'recall.enabled',            // 唯一，建议 <插件>:<项>
+  group: '自动召回',                // 分组标题，默认「附属插件」
+  title: '每轮自动召回',
+  description: 'BM25 检索历史日志后追加一条消息',
+  kind: 'toggle',                  // toggle | select | text | readonly
+  value: true,                     // 当前值，必须与 kind 匹配
+  order: 10,
+  onChange: async (value) => { /* 持久化 + 应用；抛错则页面保留旧值并显示错误 */ },
+})
+ctx.effect(() => () => handle.dispose())   // 本插件卸载时把项从页面撤掉
+```
+
+`select` 需给 `options: [{ value, label }]`；`text` 可给 `placeholder`；`readonly` 只展示不可写。宿主会校验 id 唯一、类型匹配、select 值必须在 options 里。句柄还有 `get()` / `set(value)`（等价页面回写，会触发 `onChange`）/ `update(patch)`（只同步展示，不触发回写）。
+
+需要完整自定义界面（图表、复合控件）的客户端半，往子槽 `settings.persona-memory.item`（`kind: 'list'`）注册即可——该槽由本插件的 `settings.section` 注册项声明，每个贡献自己画整行：
+
+```js
+ctx.slots.inject('settings.persona-memory.item', () => ctx.slots.register({
+  name: 'settings.persona-memory.item',
+  id: 'my-panel',
+  order: 100,
+}, MyRow))
+```
+
+页面只负责渲染与回写，值存哪里、变更后做什么，全在注册方。`ctx.inject` 等到服务出现再注册，不要裸 `ctx.get()` 后假设非空。
+
+```
+GET  /persona-memory/api/settings
+POST /persona-memory/api/settings/injection   { injection: { persona?, globalMemory?, projectMemory? } }
+POST /persona-memory/api/settings/item        { id, value }
+```
 
 ## 配置
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `personaEnabled` | `true` | 注入 `<soul>` / `<user>` |
-| `memoryEnabled` | `true` | 注入 `<memory>` |
-| `subagentProjectOnly` | `true` | 子代理会话只注入项目记忆（关掉＝子代理与主会话一致） |
+| `personaEnabled` | `true` | 注入 `<soul>` / `<user>`；设置页开关可覆盖 |
+| `memoryEnabled` | `true` | 注入 `<memory>`（同时是全局/项目两个开关的默认值）；设置页开关可覆盖 |
+| `subagentProjectOnly` | `true` | 子代理只注入项目记忆 |
 | `maxChars` | `8000` | 单文件注入字符上限 |
-| `maxFactLines` | `100` | 全局 FACT.md 的行数硬上限（写入时校验，超限报错） |
-| `maxFactBytes` | `8000` | 全局 FACT.md 的字节硬上限（UTF-8；与 `maxFactLines` 同时生效） |
-| `maxProjectChars` | `8000` | 项目 MEMORY.md 的字符硬上限（写入时校验，超限报错；与 `maxChars` 同口径） |
+| `maxFactLines` | `100` | 全局 FACT.md 行数硬上限 |
+| `maxFactBytes` | `8000` | 全局 FACT.md 字节硬上限（UTF-8） |
+| `maxProjectChars` | `8000` | 项目 MEMORY.md 字符硬上限 |
 | `panelPath` | `/persona-memory` | 面板 HTTP 前缀 |
 
-> 0.2.0 移除了 `journalEnabled` / `journalInject` / `journalLimit` 三个键 ——
-> 长期日志不再进提示词，这些开关没有意义了。
+`personaEnabled` / `memoryEnabled` 现在是**默认值**：设置页把用户显式设过的开关写进 `injection.json`，覆盖层优先。`globalMemory` / `projectMemory` 在覆盖层里各自独立，但默认都取 `memoryEnabled`。
 
-## 首次运行会做什么
+## 首次运行
 
-- 建 `$DSH_HOME/memory/FACT.md`（模板，若不存在）。
-- 角色库为空时建 `personas/default/`：把旧版 `$DSH_HOME/memory/{SOUL.md,USER.md}`
-  的内容迁进去（旧文件保留不动），并把 `default` 设为当前角色。
+建 `$DSH_HOME/memory/FACT.md`（模板，若不存在）；角色库为空时建 `personas/default/`，迁移旧 `$DSH_HOME/memory/{SOUL.md,USER.md}` 内容（旧文件保留），并设为当前角色。
 
-## 排错：改完 `lib/*.js` 为什么还是旧行为？
+## 技能：persona-creator
 
-**因为 DSH 默认不监听 `node_modules`，而且 Node 会缓存已 import 的 ESM 模块。**
-改完插件源码后，即使 `plugin_manager set_bundle enabled=true` 报告
-`application: applied`，**正在运行的那个 Host 进程里仍是旧模块**——它只重新组合了
-profile 补丁层（让 `persona-memory` 这一行重新挂上），并不会重新从磁盘 import
-那份 `lib/index.js`。
+正本在 `skills/persona-creator/SKILL.md`，**不注册为技能、不进 tarball**。安装 = 拷到 `$DSH_HOME/personas/skills/persona-creator/SKILL.md`，并由 `personas/README.md` 以相对路径指向。发现通路：`persona` 工具描述 → 角色库 → README → 技能文件。
 
-具体机制（读宿主源码得到）：
+## 改源码后为何仍是旧行为
 
-- `dsh-hmr` 的默认 `ignored` 含 `**/node_modules`，而插件装在
-  `profiles/<name>/node_modules/@dsh-external/...` 下 ⇒ 它**根本不在监听范围内**。
-- base 组合包里 `hmr` 的 `config.root` 是 `[]`（见 `profiles/<name>/cordis.yml`），
-  即「只看显式注册的配置文件，不做源码模块监听」。
-- 模块一旦被 import 就进了 Node 的 ESM `loadCache`；不清缓存 + 重新 import，
-  拿到的就是旧命名空间。
+DSH 不监听 `node_modules`，Node 缓存 ESM 模块。改 `lib/*.js` 必须重启 DSH；改 `cordis.yml` / `cordis.patch.yml` 才可能热生效。自检：`Select-String ... -Pattern 'interpolate: false'` 看磁盘版本，`Get-Process` 看 Host 启动时间。改已安装副本时用「拷临时文件 → 删原文件 → 移回」，避免硬链接写穿 pnpm store。
 
-因此：**改了 `lib/*.js` 必须重启 DSH**（或让 `dsh-hmr` 真的能看见该文件并走
-`partialReload()` 清缓存）。改 `cordis.yml` / `cordis.patch.yml` 这类配置才可能热生效。
-
-自检「当前跑的是哪一版」：
+## 测试
 
 ```powershell
-# 1) 磁盘上这份是不是新的
-Select-String -Path "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@dsh-external\dsh-persona-memory\lib\index.js" -Pattern 'interpolate: false'
-
-# 2) Host 主进程是什么时候起的（早于你改文件的时间 ⇒ 它跑的是旧代码）
-Get-Process | Where-Object ProcessName -match 'DeepSeek' | Select-Object Id,StartTime
-```
-
-> **改已安装副本时的坑（实测）**：这个 profile 用 `nodeLinker: hoisted`，git 依赖的
-> **文件**是硬链接到 pnpm store 的 —— 没改过的 `browser-use` 用 `fsutil hardlink list`
-> 能看到 2 个链接（profile 路径 + store 路径）。所以**直接 `Copy-Item` 覆盖会写穿到
-> store**，可能污染其他 profile。正确做法：
-> `Copy-Item` 到临时文件 → `Remove-Item` 原文件（断开链接）→ `Move-Item` 回来。
-> 改完 `fsutil hardlink list` 应只剩 1 个链接。
-
-## 回归测试
-
-```powershell
-# 纯 node 那四条
 node test/scope.test.mjs
+node test/settings.test.mjs
 node test/fact-limit.test.mjs
 node test/fact-bytes.test.mjs
 node test/project-limit.test.mjs
-# 其余几条（要真实宿主渲染器 / 真实 cordis）用统一入口，会自动跑仓库源码 + 已安装副本
-pwsh -File test/run-all.ps1
+pwsh -File test/run-all.ps1   # 其余需真实宿主渲染器/cordis 的用例
 ```
 
-| 测试 | 验什么 |
-|---|---|
-| `scope.test.mjs` | 注入作用域：子代理只拿项目记忆；`subagentProjectOnly` 可回退；**日志段落不存在** |
-| `fact-limit.test.mjs` | **FACT.md 行数硬上限**：上限内通过 / 超 1 行被拒且不落盘 / `read` 报告与超限警告 / 契约写明上限 / `maxFactLines` 可配 |
-| `fact-bytes.test.mjs` | **FACT.md 字节硬上限**：行数没超但字节超也被拒 / 恰好 8000 B 通过 / 双超时两项都报 / UTF-8 3 字节每汉字 / `\r\n` 归一化 / 契约写明双上限 / `maxFactBytes` 可配 |
-| `project-limit.test.mjs` | **项目 MEMORY.md 字符硬上限**：超限被拒且不落盘 / 恰好 8000 通过 / **边界不变量：8000 不被截断、8001 被截断** / 报错指向 `action=append` 与 `scope=global` / 中文按字符算 / 主会话与子代理契约都写明上限 / `maxProjectChars` 可配 |
-| `host-interpolate.test.mjs` | 用**真实** `renderPrompt()` 验证 `interpolate: false` 生效；反证「摘掉它就会复现用户的报错」 |
-| `cordis-integration.test.mjs` | 真实 `Context` + 真实 `system-prompt` 全链路（section 注册 → assemble → render） |
-| `snapshot-resume.test.mjs` | 已固化快照的续接路径；旧快照里的 `journal` 字段必须被忽略 |
-| `real-data.test.mjs` | ★ 用**用户真实**的 `$DSH_HOME` 记忆与角色文件跑真实渲染，不抛错 |
-
-覆盖两个曾经真实炸掉的点：① 段落必须 `interpolate: false`（记忆里出现 `{{变量}}`
-不能让 turn 崩）；② 子代理只注入项目记忆，角色/全局记忆一律不注入，
-且 `subagentProjectOnly: false` 能回退到旧行为。测试用临时 `DSH_HOME`，不碰真实数据。
+覆盖：注入作用域、插值安全（`interpolate: false`）、注入开关与设置项注册表、FACT 行数/字节上限、项目字符上限与 8000/8001 边界不变量、真实 `renderPrompt()`、真实 cordis 全链路、快照续接、真实 `$DSH_HOME` 数据。
 
 ## 已知边界
 
-- **`complete: true` 的预设**（如内置 `minimal`）会把系统提示词替换成唯一一段，
-  此时任何段落都注入不进去——那是该预设的语义，不是本插件的开关。
-- 会话快照不随会话删除而回收；`snapshots/` 里会留小 JSON。文件很小，需要时手工清。
-- 面板的「项目」列表来自本进程见过的会话 cwd；没有会话跑过的项目不会出现。
-- **角色 / 全局记忆只在主会话注入**。子代理需要这些内容时，让它自己调
-  `memory action=read` / `action=search`（只读）——注入面收窄是有意的。
-- **长期日志任何会话都不注入**（0.2.0 起）。旧版本落盘的会话快照里可能还留着
-  `journal` 字段，读快照时代码会忽略它 —— 无害，也可以直接删掉那些 JSON。
-- 不注入日志 ≠ 模型自动会查。契约里的指针是**提示**不是保证：模型仍可能漏查。
-  这是拿 token 换准确率的有意取舍 —— 想要「零漏查」请把稳定结论写进 FACT.md。
-- **历史遗留的超限 FACT.md 不会被自动改写**：`read` 会附警告，其后任何 `scope=global`
-  写入都会被拒。要么精简到上限内，要么把项目内容搬去 `scope=project`。
-- **历史遗留的超限项目 MEMORY.md 同样不会被自动改写**：`read` 附警告，其后任何
-  `scope=project` 写入都会被拒。想恢复可写，就得先精简到 `maxProjectChars` 以内
-  （或临时把上限调大）——这是有意的：宁可写不进去，也不要静默截断。
+- `complete: true` 的预设（如 `minimal`）替换整个系统提示词，段落注入不进去。
+- 设置页开关只管**注入**：关掉全局记忆后，`memory action=read/update, scope=global` 仍然可用（工具契约仍按开关裁剪提示，不会主动引导）。
+- 设置页的扩展项注册表是**进程内**的：附属插件没装载时项自然消失；值持久化由注册方自己负责，本插件只存三个内置开关。
+- 快照不随会话删除回收，`snapshots/` 会留小 JSON。
+- 面板「项目」列表来自本进程见过的会话 cwd。
+- 历史遗留的超限 FACT.md / MEMORY.md 不会被自动改写，`read` 附警告，其后写入被拒。
+- 日志不注入，契约指针是提示不是保证，稳定结论请写进 FACT.md。
 
-## 仓库结构与源码
+## 仓库结构
 
-本仓库以 **`lib/` 为唯一源码**，纯 JavaScript（ESM），**不需要任何构建链**，克隆即可用：
-
-| 路径 | 角色 |
-|------|------|
-| `lib/index.js` | 宿主半：服务注册、提示词段落、`memory` / `persona` 工具、面板 HTTP 路由 |
-| `lib/client.js` | 客户端半：手写 ModuleLoader 包，注册右侧栏标签页 |
-| `lib/types/index.d.ts` | 宿主半的类型声明 |
-| `test/scope.test.mjs` | 注入作用域 + 插值安全的回归测试 |
-| `test/fact-limit.test.mjs` | 全局 FACT.md 行数硬上限的回归测试 |
-| `test/fact-bytes.test.mjs` | 全局 FACT.md 字节硬上限的回归测试 |
-| `test/project-limit.test.mjs` | 项目 MEMORY.md 字符硬上限的回归测试 |
-| `skills/persona-creator/SKILL.md` | 角色创建流程**正本**（装到角色库用，**不随包发布**，见「技能」） |
-| `cordis.patch.yml` | 组合包层：把 `persona-memory` 行插进宿主组合 |
-
-`lib/` 下的 JS **就是源码**（0.4.1 起不再带 `lib/index.js.map`——它是编译期残留，对应的 TypeScript
-原稿并不在本仓库内，留着只会与源码不同步）。修改直接改 `lib/*.js`，改完重启 DSH 即生效。
+`lib/` 为唯一源码（纯 ESM，无构建链）：`lib/index.js`（宿主半）、`lib/client.js`（客户端半）、`lib/types/index.d.ts`。另有 `test/*.mjs`、`skills/persona-creator/SKILL.md`、`cordis.patch.yml`（组合包层）。
 
 ## 协议
 
-MIT License，全文见 [LICENSE](./LICENSE)，版权人 `hu568`（https://github.com/hu568）。
+MIT License，见 [LICENSE](./LICENSE)，版权人 `hu568`（https://github.com/hu568）。
