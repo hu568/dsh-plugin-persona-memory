@@ -149,9 +149,23 @@ POST /persona-memory/api/settings/item        { id, value }
 | `maxFactLines` | `100` | 全局 FACT.md 行数硬上限 |
 | `maxFactBytes` | `8000` | 全局 FACT.md 字节硬上限（UTF-8） |
 | `maxProjectChars` | `8000` | 项目 MEMORY.md 字符硬上限 |
+| `compactionEnabled` | `false` | **压缩管线总开关（0.8.0）**：关闭时写路径与 0.7.0 逐字节相同 |
+| `compactProvider` | `''` | 合并用的 provider（空 ⇒ 不做 LLM 合并，只淘汰） |
+| `compactModel` | `''` | 合并用的 model（空 ⇒ 同上） |
+| `compactKeepBackups` | `5` | `memory/backups/` 里每份文件保留的备份数 |
 | `panelPath` | `/persona-memory` | 面板 HTTP 前缀 |
 
 `personaEnabled` / `memoryEnabled` 现在是**默认值**：设置页把用户显式设过的开关写进 `injection.json`，覆盖层优先。`globalMemory` / `projectMemory` 在覆盖层里各自独立，但默认都取 `memoryEnabled`。
+
+## 压缩管线（0.8.0 · 默认关闭）
+
+水位 85% → FACT 合并（LLM）→ 仍 ≥100% 淘汰（最多 5 条，投影到 ≤75%）→ 仍 ≥100% 返回 `MEMORY_BUDGET_EXCEEDED`。MEMORY.md 只淘汰、不合并。
+
+- 手动：`/memory-compact <fact|memory|all> [dry]`、`/memory-compact rollback <yyyyMMdd-HHmmss>`
+- 面板：`GET /api/memory/compaction`、`POST /api/memory/lock`、`POST /api/memory/unlock`
+- 保护区只认**人工锁定**（`memory/locks.json`）与正文里的 `<!-- keep -->`；`★` 不是保护信号
+- 侧车索引 `memory/index.json` 缺失/损坏 ⇒ 淘汰整体跳过（宁可不压缩，也不盲删）
+- 审计 `memory/compaction.jsonl`；备份 `memory/backups/<file>-<yyyyMMdd-HHmmss>.bak`（保留 5 份，SHA256 校验后才回滚）
 
 ## 首次运行
 

@@ -27,6 +27,18 @@ export interface Config {
     maxFactBytes: number;
     /** 项目 MEMORY.md 的字符硬上限（`action=update, scope=project` 与面板写入都受它约束）。 */
     maxProjectChars: number;
+    /**
+     * 压缩管线总开关（0.8.0 · P4）：**默认 false**。
+     *
+     * 关闭时写入路径与 0.7.0 逐字节相同；打开后写入前水位 ≥85% 会先合并/淘汰。
+     */
+    compactionEnabled: boolean;
+    /** 合并用的 provider（空 ⇒ 不做 LLM 合并，只走淘汰那一层）。 */
+    compactProvider: string;
+    /** 合并用的 model（空 ⇒ 同上）。 */
+    compactModel: string;
+    /** 压缩备份保留份数。 */
+    compactKeepBackups: number;
     /** 右侧栏面板的 HTTP 前缀。 */
     panelPath: string;
 }

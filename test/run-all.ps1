@@ -45,7 +45,13 @@ function Invoke-Mjs {
 $plainNode = 'C:\Users\Administrator\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe'
 $failures = @()
 
-Write-Host '=== 1/10 scope.test.mjs（仓库源码，纯 node）' -ForegroundColor Cyan
+Write-Host '=== 1/10 语法检查 lib/*.js + scope.test.mjs（仓库源码，纯 node）' -ForegroundColor Cyan
+# 先做语法检查：client.js 里的 CSS 是模板字符串，注释里一个反引号就会让整个入口
+# 在宿主启动时 import 失败（2026-10-31 真机事故）。这一步必须在装配前拦住。
+Get-ChildItem (Join-Path $repo 'lib') -Filter '*.js' | ForEach-Object {
+    & $plainNode --check $_.FullName
+    if ($LASTEXITCODE -ne 0) { $failures += "node --check $($_.Name)" }
+}
 & $plainNode (Join-Path $repo 'test\scope.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'scope.test.mjs (repo)' }
 
@@ -53,9 +59,19 @@ Write-Host '=== 2/10 settings.test.mjs（仓库源码，纯 node：注入开关 
 & $plainNode (Join-Path $repo 'test\settings.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'settings.test.mjs (repo)' }
 
-Write-Host '=== 3/10 fact-limit.test.mjs（仓库源码，纯 node：FACT.md 行数硬上限）' -ForegroundColor Cyan
+Write-Host '=== 3/10 fact-limit.test.mjs + store.test.mjs + store-api.test.mjs + compaction.test.mjs（仓库源码，纯 node：FACT.md 行数硬上限 / store 子路径 / 0.7.0 新 API / 压缩管线）' -ForegroundColor Cyan
 & $plainNode (Join-Path $repo 'test\fact-limit.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'fact-limit.test.mjs (repo)' }
+
+& $plainNode (Join-Path $repo 'test\store.test.mjs')
+if ($LASTEXITCODE -ne 0) { $failures += 'store.test.mjs (repo)' }
+
+& $plainNode (Join-Path $repo 'test\store-api.test.mjs')
+if ($LASTEXITCODE -ne 0) { $failures += 'store-api.test.mjs (repo)' }
+
+# 压缩管线（P4 / 0.8.0）：默认关闭，纯 node + 临时 DSH_HOME + 假 callModel。
+& $plainNode (Join-Path $repo 'test\compaction.test.mjs')
+if ($LASTEXITCODE -ne 0) { $failures += 'compaction.test.mjs (repo)' }
 
 Write-Host '=== 4/10 fact-bytes.test.mjs（仓库源码，纯 node：FACT.md 字节硬上限）' -ForegroundColor Cyan
 & $plainNode (Join-Path $repo 'test\fact-bytes.test.mjs')
@@ -96,6 +112,37 @@ if (-not (Test-Path $installed)) {
         & $plainNode (Join-Path $repo "test\$pure.test.mjs")
         if ($LASTEXITCODE -ne 0) { $failures += "$pure.test.mjs (installed)" }
         Remove-Item Env:PERSONA_MEMORY_ENTRY -ErrorAction SilentlyContinue
+    }
+
+    # store.test.mjs 走 ./store 子路径：已装份还没有 lib/store.js（0.6.1 之前）时跳过，不判失败。
+    $installedStore = Join-Path $installed 'lib\store.js'
+    if (Test-Path $installedStore) {
+        $env:PERSONA_MEMORY_STORE_ENTRY = 'file:///' + ($installedStore -replace '\\', '/')
+        & $plainNode (Join-Path $repo 'test\store.test.mjs')
+        if ($LASTEXITCODE -ne 0) { $failures += 'store.test.mjs (installed)' }
+        Remove-Item Env:PERSONA_MEMORY_STORE_ENTRY -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "跳过 store.test.mjs：已装份还没有 lib/store.js（$installedStore）" -ForegroundColor Yellow
+    }
+
+    # store-api.test.mjs 测 0.7.0 新 API：已装份的 lib/store.js 还没有 configureStore 时跳过，不判失败。
+    if ((Test-Path $installedStore) -and ((Get-Content $installedStore -Raw) -match 'configureStore')) {
+        $env:PERSONA_MEMORY_STORE_ENTRY = 'file:///' + ($installedStore -replace '\\', '/')
+        & $plainNode (Join-Path $repo 'test\store-api.test.mjs')
+        if ($LASTEXITCODE -ne 0) { $failures += 'store-api.test.mjs (installed)' }
+        Remove-Item Env:PERSONA_MEMORY_STORE_ENTRY -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "跳过 store-api.test.mjs：已装份的 lib/store.js 还没有 0.7.0 新 API（$installedStore）" -ForegroundColor Yellow
+    }
+
+    # compaction.test.mjs 测 0.8.0 压缩管线：已装份还没有 lib/compaction.js 时跳过，不判失败。
+    if ((Test-Path $installedStore) -and (Test-Path (Join-Path $installed 'lib\compaction.js'))) {
+        $env:PERSONA_MEMORY_STORE_ENTRY = 'file:///' + ($installedStore -replace '\\', '/')
+        & $plainNode (Join-Path $repo 'test\compaction.test.mjs')
+        if ($LASTEXITCODE -ne 0) { $failures += 'compaction.test.mjs (installed)' }
+        Remove-Item Env:PERSONA_MEMORY_STORE_ENTRY -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "跳过 compaction.test.mjs：已装份还没有 lib/compaction.js（$installed）" -ForegroundColor Yellow
     }
 
     $r = Invoke-Mjs -Script (Join-Path $repo 'test\host-interpolate.test.mjs') -Entry $entry
