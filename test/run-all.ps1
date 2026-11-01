@@ -59,7 +59,7 @@ Write-Host '=== 2/10 settings.test.mjs（仓库源码，纯 node：注入开关 
 & $plainNode (Join-Path $repo 'test\settings.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'settings.test.mjs (repo)' }
 
-Write-Host '=== 3/10 fact-limit + store + store-api + compaction + panel-workspace（仓库源码，纯 node：FACT 行数上限 / store 子路径与新 API / 压缩管线 / 面板跟随工作区）' -ForegroundColor Cyan
+Write-Host '=== 3/10 fact-limit + store + store-api + revision + compaction + panel-workspace（仓库源码，纯 node：FACT 行数上限 / store 子路径与新 API / 整篇覆盖乐观锁 / 压缩管线 / 面板跟随工作区）' -ForegroundColor Cyan
 & $plainNode (Join-Path $repo 'test\fact-limit.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'fact-limit.test.mjs (repo)' }
 
@@ -68,6 +68,10 @@ if ($LASTEXITCODE -ne 0) { $failures += 'store.test.mjs (repo)' }
 
 & $plainNode (Join-Path $repo 'test\store-api.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'store-api.test.mjs (repo)' }
+
+# 整篇覆盖写入的乐观锁（PLAN P0）：revision 冲突拒写、写锁串行。
+& $plainNode (Join-Path $repo 'test\revision.test.mjs')
+if ($LASTEXITCODE -ne 0) { $failures += 'revision.test.mjs (repo)' }
 
 # 压缩管线（P4 / 0.8.0）：默认开启，纯 node + 临时 DSH_HOME + 假 callModel。
 & $plainNode (Join-Path $repo 'test\compaction.test.mjs')
@@ -137,6 +141,16 @@ if (-not (Test-Path $installed)) {
         Remove-Item Env:PERSONA_MEMORY_STORE_ENTRY -ErrorAction SilentlyContinue
     } else {
         Write-Host "跳过 store-api.test.mjs：已装份的 lib/store.js 还没有 0.7.0 新 API（$installedStore）" -ForegroundColor Yellow
+    }
+
+    # revision.test.mjs 测整篇覆盖乐观锁：已装份的 store 还没有 replaceDocument 时跳过，不判失败。
+    if ((Test-Path $installedStore) -and ((Get-Content $installedStore -Raw) -match 'function replaceDocument')) {
+        $env:PERSONA_MEMORY_STORE_ENTRY = 'file:///' + ($installedStore -replace '\\', '/')
+        & $plainNode (Join-Path $repo 'test\revision.test.mjs')
+        if ($LASTEXITCODE -ne 0) { $failures += 'revision.test.mjs (installed)' }
+        Remove-Item Env:PERSONA_MEMORY_STORE_ENTRY -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "跳过 revision.test.mjs：已装份的 lib/store.js 还没有 replaceDocument（$installedStore）" -ForegroundColor Yellow
     }
 
     # compaction.test.mjs 测 0.8.0 压缩管线：已装份还没有 lib/compaction.js 时跳过，不判失败。

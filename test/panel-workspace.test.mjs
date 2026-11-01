@@ -5,6 +5,7 @@
  *  2. 项目列表包含 DSH 工作区注册表里的工作区（即使本进程一个会话都没跑过）；
  *  3. 不带 cwd 时 `memory.current = null`（旧客户端 / 写操作回包不改变面板选择）；
  *  4. 面板能保存「注册表里、没跑过会话」的工作区的项目记忆；
+ *  4b. 面板保存带乐观锁：`baseRevision` 过期 ⇒ 409 且文件一字不动（草稿提示保留），重读后可保存；
  *  5. 压缩管线默认开启：`Config({}).compactionEnabled === true`，且默认配置下 `/memory-compact` 可用。
  *
  * 跑法：node test/panel-workspace.test.mjs
@@ -165,6 +166,35 @@ res = await invoke('/persona-memory/api/state', 'GET', {
     url: '/persona-memory/api/state?cwd=' + encodeURIComponent(wsGamma),
 });
 assert.equal(res.json.state.memory.current.exists, true, '保存后该工作区应显示已创建');
+
+/* ── 4b. 面板保存的乐观锁：别处改过 ⇒ 409 且不写盘；重读后照常保存 ──────── */
+res = await invoke('/persona-memory/api/state', 'GET', {
+    url: '/persona-memory/api/state?cwd=' + encodeURIComponent(wsGamma),
+});
+const gammaBefore = readFileSync(gammaPath, 'utf8');
+const gammaRevision = res.json.state.memory.current.revision;
+assert.match(gammaRevision, /^[0-9a-f]{16}$/, 'state 应下发项目的 revision');
+// 模拟「面板开着的时候，模型/自动沉淀改了这份 MEMORY.md」
+const gammaChanged = gammaBefore + '\n- 别处追加的一条\n';
+writeFileSync(gammaPath, gammaChanged, 'utf8');
+res = await invoke('/persona-memory/api/memory/save', 'POST', {
+    body: { scope: 'project', path: gammaPath, content: gammaBefore + '\n- 面板想加的一条\n', baseRevision: gammaRevision },
+});
+assert.equal(res.status, 409, '过期 baseRevision 应返回 409：' + JSON.stringify(res.json));
+assert.equal(res.json.code, 'MEMORY_REVISION_CONFLICT');
+assert.equal(readFileSync(gammaPath, 'utf8'), gammaChanged, '冲突时文件一个字节都不能变');
+assert.match(res.json.error, /草稿还在/, '面板文案要告诉人草稿没丢、怎么继续');
+// 重新读取后 revision 变了，用新的保存就成功
+res = await invoke('/persona-memory/api/state', 'GET', {
+    url: '/persona-memory/api/state?cwd=' + encodeURIComponent(wsGamma),
+});
+const gammaNewRevision = res.json.state.memory.current.revision;
+assert.notEqual(gammaNewRevision, gammaRevision, '别处改过之后 revision 必须变');
+res = await invoke('/persona-memory/api/memory/save', 'POST', {
+    body: { scope: 'project', path: gammaPath, content: gammaChanged + '\n- 面板加的一条\n', baseRevision: gammaNewRevision },
+});
+assert.equal(res.status, 200, JSON.stringify(res.json));
+assert.match(readFileSync(gammaPath, 'utf8'), /- 面板加的一条/);
 
 /* ── 5. 默认配置下 /memory-compact 可用 ─────────────────────────────────── */
 const run = (rawInput) => registeredCommand.handler({

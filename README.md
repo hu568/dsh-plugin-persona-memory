@@ -56,13 +56,33 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 
 FACT.md 字节先做 `\r\n` → `\n` 归一化，与 `countLines()` 同口径。`memory action=read` 报告当前体量/上限并附超限警告；面板保存走同一道闸口。
 
+## 并发写入：整篇覆盖的乐观锁（0.8.4）
+
+FACT.md / MEMORY.md 有两类写者，它们的语义完全不同：
+
+| 写者 | 语义 | 锁 |
+|---|---|---|
+| `insertEntry` / `replaceEntry` / `deleteEntry`（自动沉淀、压缩管线） | 条目级「读 → 改 → 写」 | 写锁内，安全 |
+| `memory action=update` / 面板保存 | **整篇覆盖**（门外的旧正文 + 新正文） | 0.8.4 起取写锁 + 核对 revision |
+
+0.8.3 及以前，整篇覆盖不取锁也不核对版本：读完之后只要有人插入过一条，整篇覆盖就把它**静默抹掉**——不报错、不回滚，只表现为「记忆神秘地少了一段」。
+
+现在的规则：
+
+- `contentRevision(text)` = `sha256(文件正文原文)` 前 16 位（不做换行归一化，必须与 `readText()` 逐字可比）；
+- `memory action=read` 在 FACT 段与项目段回带 `revision <16 位>`；
+- `memory action=update` 可带 `expectedRevision`：与磁盘不一致 ⇒ 抛 `MEMORY_REVISION_CONFLICT`（`status: 409`），**一个字节都不写**，错误文案要求「重新读取 → 合并 → 再写」；
+- 不带 `expectedRevision` ⇒ 行为与旧版一致（仍会取写锁，只少了版本核对）；
+- 面板保存回传 `baseRevision`：面板开着期间模型写过，保存会被拒并在 toast 里说明，草稿保留在编辑器里（顶栏「重新读取」可强制刷新）；
+- 冲突是**正常控制流**，不是坏件：重读合并即可，工具描述里写明了这一点，避免模型把 409 当故障反复重试同样的内容。
+
 ## 注入时机
 
 首条用户消息前每轮读盘；首条消息后固化成本会话快照（内存 + 落盘），此后读快照，KV 缓存前缀稳定。快照不含日志正文，只留 `journalTotal` 计数。子代理快照只留内存。resume / 重启语义不变。
 
 ## 工具
 
-- `memory`：`read`（全局 + 项目 + 最近日志，报告体量/上限）、`update`（整篇覆盖，`scope=global|project`，超限报错）、`append`（追加 `{ts,tags,text}`）、`search`（子串 + 可选 tag，新→旧）。
+- `memory`：`read`（全局 + 项目 + 最近日志，报告体量/上限与 `revision`）、`update`（整篇覆盖，`scope=global|project`，超限报错；可选 `expectedRevision` 乐观锁）、`append`（追加 `{ts,tags,text}`）、`search`（子串 + 可选 tag，新→旧）。
 - `persona`：`list` / `current` / `show` / `use`（新会话生效）/ `create` / `update` / `delete`（当前角色不可删）。
 
 均全局注册、无路径参数，走进程内 `node:fs`。
@@ -157,17 +177,41 @@ POST /persona-memory/api/settings/item        { id, value }
 
 `personaEnabled` / `memoryEnabled` 现在是**默认值**：设置页把用户显式设过的开关写进 `injection.json`，覆盖层优先。`globalMemory` / `projectMemory` 在覆盖层里各自独立，但默认都取 `memoryEnabled`。
 
-## 压缩管线（0.8.0 · 默认开启）
+## 压缩管线（0.8.3 · 默认开启）
 
-水位 85% → 合并（LLM）→ 仍 ≥100% 淘汰（最多 5 条，投影到 ≤75%）→ 仍 ≥100% 返回 `MEMORY_BUDGET_EXCEEDED`。
+水位 85% → 合并（LLM）→ 逐条精简（LLM）→ 仍 ≥100% 淘汰（最多 5 条，投影到 ≤75%）→ 仍 ≥100% 返回 `MEMORY_BUDGET_EXCEEDED`。
 
-**85% 与 100% 是两件事**：85% 只是「进入压缩流程」的门槛（此时只合并）；真正删条目要求合并后仍 **≥100%**。所以 7998/8000 字符（99.975%）**不会删任何东西**，这是设计而不是失效。
+**85% 与 100% 是两件事**：85% 只是「进入压缩流程」的门槛（此时只合并/精简）；真正删条目要求合并+精简后仍 **≥100%**。所以 7998/8000 字符（99.975%）**不会删任何东西**，这是设计而不是失效。
 
-**没有合并、也没有淘汰时绝不写盘**：`splitLines` / `joinLines` 会把「结尾多一个空行」归一化掉，那不是压缩 —— 不写文件、不备份、不记审计（0.8.0 修）。
+**没有合并、精简、淘汰时绝不写盘**：`splitLines` / `joinLines` 会把「结尾多一个空行」归一化掉，那不是压缩 —— 不写文件、不备份、不记审计（0.8.0 修）。
 
 合并规则：
 - **FACT.md**：同一 `## 分组` 里语义相近的 2–10 条 `- ` 条目交给 LLM 合并成一条（保留版本号/路径等具体值，结果必须变短）。
 - **MEMORY.md**：条目 = 编号行（`1.`）**或顶层（缩进 0）的 `- ` 列表项**（真实项目记忆常常整篇 bullet 化；更深缩进的 `- ` 是子项）。只合并「同一分组里**没有子项**的叶子条目」：编号条目合并后**保留编号与缩进**并把空洞重排成连续编号，bullet 条目合并后仍是 `- `；**带子项的条目只淘汰、绝不合并**（合并会拆坏层级）；`## 速查` 里的列表项是参考数据，不参与合并/淘汰/回填。
+
+### 逐条精简（0.8.2 起）：为什么还需要这一层
+
+合并层要求「同一分组内两两相似度 ≥ 0.7」。真实手写记忆里**每条都是一个独立事实**（不同的命令、字段、坑），本机 Astrbot 的 43 条叶子条目在阈值 0.7 / 0.6 / 0.5 / 0.4 下实测**都是 0 组** —— 提示词写着却一次都调不到模型，用户看到的就是「有 LLM 能力却压不动」。
+
+精简层不依赖相似度，只要求「条目够长」：
+- 按 `## 分组` 顺序分批（默认 10 条/批，单次压缩最多 8 批）交给 LLM，**输出的行数必须与输入一一对应**；
+- 每条必须真的变短（**正文 + 搬进速查区的项**合计比原文短），且**具体值（版本号 / 路径 / 命令 / 数字）一个都不许丢**；
+- 某一条不合格只跳过那一条（保留原样），不连坐整批；整批行数不符则整批放弃；
+- 因为是 1 对 1 改写，**编号、缩进、子项、条目数全部原样保留**，不需要重排编号；
+- 与合并层同样只碰**叶子条目**：带子项的条目连模型都不调。
+
+### 正文少行内代码 + 命令进「速查」（0.8.3 修）
+
+0.8.2 的实测缺陷：Astrbot 的 33 条候选**全部含反引号**，而校验器把 `` `…` ``（连反引号）当成必须逐字保留的「具体值」⇒ 任何「正文去行内代码」的改写都被判「丢了具体值」，两轮 `/memory-compact` 各花 100+ 秒调 LLM，**一条改写都没通过**，只剩淘汰在删条目。同时提示词写的是「≤120 字」，比 MEMORY 条目模板（≤200 字）还严。
+
+0.8.3 起的口径（对齐 PLAN 01 §3.2「正文禁止行内代码，命令/路径一律进末尾的「## 速查」区」）：
+
+- **提示词**：MEMORY 要求按 `正文‖速查项` 两段式输出 —— 正文用中文说人话、不许有反引号、≤200 字；速查项是该条里要逐字照抄的命令 / 路径 / 包名 / 配置字段，用「·」分隔。
+- **校验**：反引号**不是信息**，比较前一律脱掉（`normalizeForCompare()`）；具体值只要出现在「正文 + 速查项」里就算保留。正文里模型残留的反引号会被程序脱掉；真丢了版本号 / 路径仍然拒。
+- **落盘**：速查项渲染成 `- 项`（纯文本清单，不加反引号）追加到 `## 速查` 区（没有就新建，同项去重），正文行替换为改写后的版本；审计的 `merged[].quick` 记下每条搬走了什么。
+- **FACT**：没有速查区，正文同样去反引号，上限仍是 120 字。
+
+两层共用一次 pre-image 与一个 `callModel`：先合并相似条目，被合并吃掉的条目不再参与精简；写盘后立刻 `syncIndexAfterWrite` 把侧车索引同步成新正文（否则改写后的条目 id 全变孤儿，下一轮会报「缺元数据」而 0 候选）。
 
 ### 合并用哪个模型
 
@@ -210,11 +254,12 @@ node test/fact-limit.test.mjs
 node test/fact-bytes.test.mjs
 node test/project-limit.test.mjs
 node test/panel-workspace.test.mjs
+node test/revision.test.mjs
 node test/compaction.test.mjs
 pwsh -File test/run-all.ps1   # 其余需真实宿主渲染器/cordis 的用例
 ```
 
-覆盖：注入作用域、插值安全（`interpolate: false`）、注入开关与设置项注册表、FACT 行数/字节上限、项目字符上限与 8000/8001 边界不变量、面板跟随工作区（`/api/state?cwd=` + 工作区注册表 + 压缩默认开启）、真实 `renderPrompt()`、真实 cordis 全链路、快照续接、真实 `$DSH_HOME` 数据、压缩管线（合并/淘汰/回填/无操作不写盘/命令 kind）。
+覆盖：注入作用域、插值安全（`interpolate: false`）、注入开关与设置项注册表、FACT 行数/字节上限、项目字符上限与 8000/8001 边界不变量、面板跟随工作区（`/api/state?cwd=` + 工作区注册表 + 压缩默认开启）、真实 `renderPrompt()`、真实 cordis 全链路、快照续接、真实 `$DSH_HOME` 数据、压缩管线（合并/淘汰/回填/无操作不写盘/命令 kind）、整篇覆盖的乐观锁（revision 冲突拒写且文件一字不动 / 读后别人插入不丢 / 并发两写者只成功一个 / 工具层 read-front-update 闭环）。
 
 ## 已知边界
 
@@ -228,7 +273,26 @@ pwsh -File test/run-all.ps1   # 其余需真实宿主渲染器/cordis 的用例
 
 ## 仓库结构
 
-`lib/` 为唯一源码（纯 ESM，无构建链）：`lib/index.js`（宿主半）、`lib/client.js`（客户端半）、`lib/types/index.d.ts`。另有 `test/*.mjs`、`skills/persona-creator/SKILL.md`、`cordis.patch.yml`（组合包层）。
+`lib/` 为唯一源码（纯 ESM，无构建链），0.8.1 起宿主半按职责拆成多个模块，`lib/index.js` 只留插件声明与 `apply` 装配：
+
+| 模块 | 职责 |
+| --- | --- |
+| `lib/index.js` | `name` / `inject` / `Config` 再导出 + `apply()`：注册提示词段落、工具、命令、面板路由 |
+| `lib/config.js` | 注入作用域、默认上限、Cordis `Config` 模式 |
+| `lib/paths.js` | 角色库 / 记忆目录 / 快照 / 注入开关的路径与文件名常量 |
+| `lib/injection.js` | 设置页注入开关覆盖层（`memory/injection.json`） |
+| `lib/persona-store.js` | 角色库读写、排序与模板 |
+| `lib/seed.js` | 首次运行建目录 / 迁移旧版文件 |
+| `lib/snapshot.js` | 会话注入快照（首条消息固化、落盘、子代理判定） |
+| `lib/prompt-render.js` | 提示词段落渲染与写入契约文案 |
+| `lib/tools.js` | `memory` / `persona` 两个模型工具 |
+| `lib/settings-registry.js` | 设置页「记忆」分组的扩展点 |
+| `lib/workspace.js` | 工作区注册表读取、cwd → project 记忆发现 |
+| `lib/compaction-wiring.js` | 压缩用的 cwd / 会话 / 模型路线接线 |
+| `lib/compact-command.js` | `/memory-compact` 命令与结果文案 |
+| `lib/panel.js` | 右侧栏面板与设置页的 HTTP API |
+
+其余：`lib/store.js`（存储层）、`lib/compaction.js`（压缩管线）、`lib/locks.js`（条目写锁）、`lib/client.js`（客户端半，手写 ModuleLoader 单文件包）、`lib/types/index.d.ts`。另有 `test/*.mjs`、`skills/persona-creator/SKILL.md`、`cordis.patch.yml`（组合包层）。
 
 ## 协议
 
