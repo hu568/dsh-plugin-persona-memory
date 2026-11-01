@@ -21,7 +21,7 @@
  */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -262,6 +262,26 @@ await check('selectEvictions：按评分从低到高、最多 5 条', () => {
     assert.equal(picked[0].id, coldest.id, `最冷的那条应排第一：${JSON.stringify(everyone)}`);
 });
 
+await check('同分（手写冷条目）时从文件尾部开始删：开头那几条核心结论要保住', () => {
+    const now = Date.UTC(2026, 9, 31);
+    const lines = Array.from({ length: 6 }, (_, index) => `- 条目${index + 1} node v${index + 1} 装配站里的临时文件不放进仓库`);
+    const raw = `# FACT.md\n\n## 环境\n\n${lines.join('\n')}\n`;
+    writeFileSync(factPath, raw, 'utf8');
+    const records = lines.map((text) => ({ text, firstSeen: now - 100 * 86400000, hits: 0, confidence: 'low' }));
+    const indexEntries = writeIndex(records);
+    const entries = compaction.resolveEntryIds(compaction.parseEntries('fact', raw), { version: 1, entries: indexEntries });
+    const picked = compaction.selectEvictions(entries, store.memoryIndex(), {
+        now,
+        maxEvictions: 2,
+        watermark: { lines: 8, bytes: 1300, chars: 400, limit: { lines: 100, bytes: 1200 } },
+    });
+    // `parseEntries().text` 已去掉 `- ` 前缀，`line` 是整篇原文的 0 基行号（含前面的标题/空行），
+    // 所以期望值直接从解析结果取，别拿带前缀的原文或手数行号去比。
+    assert.deepEqual(picked.map((item) => item.text), [entries[5].text, entries[4].text], '同分应从尾部删');
+    assert.deepEqual(picked.map((item) => item.line), [entries[5].line, entries[4].line], '同分应删靠后的行');
+    assert.equal(picked[0].text, lines[5].replace(/^- /, ''), '期望值与原文（去前缀后）一致');
+});
+
 /* ═════════════════════════ 5) 保护区 ═════════════════════════ */
 await check('保护区：显式锁定 + <!-- keep --> 永不淘汰（其它照删）', () => {
     const now = Date.now();
@@ -382,8 +402,8 @@ await check('75% 下限是硬的：删一条就会砸穿 ⇒ 一条都不删，�
     setLimits();
 });
 
-/* ═════════════════════════ 8) MEMORY 只淘汰 ═════════════════════════ */
-await check('MEMORY 只淘汰、绝不合并（callModel 一次都不许被调）', async () => {
+/* ═════════════════════════ 8) MEMORY 带子项 ⇒ 只淘汰 ═════════════════════════ */
+await check('MEMORY 带子项的编号条目只淘汰、不合并（callModel 一次都不许被调）', async () => {
     setLimits();
     const now = Date.now();
     const childs = Array.from({ length: 6 }, (_, index) => `第 ${index + 1} 条子项：装配站里的临时文件与草稿不放进仓库，也不写进记忆`);
@@ -405,14 +425,80 @@ await check('MEMORY 只淘汰、绝不合并（callModel 一次都不许被调�
             return '- 不该被调用';
         },
     });
-    assert.equal(called, 0, 'MEMORY 不该走合并');
+    assert.equal(called, 0, '带子项的条目不该走合并（合并会拆坏层级）');
     assert.equal(result.merged.length, 0);
     assert.ok(result.evicted.length > 0, 'MEMORY 应该走淘汰');
     const after = memoryText();
-    assert.ok(!after.includes('结论 1 node v1.0.0'), '被淘汰的编号条目应消失（连带子项）');
-    assert.ok(!after.includes('第 1 条子项'), '子项必须一起走，不能留孤儿');
     assert.ok(after.includes('# MEMORY.md'), '标题必须留着');
+    for (const item of result.evicted)
+        assert.ok(!after.includes(item.text), `被淘汰的条目应消失：${item.text}`);
+    // 子项必须跟着父条目一起走，不能留孤儿（具体删哪几条由评分/次序决定，这里只查一致性）
+    for (const index of [1, 2, 3, 4, 5, 6]) {
+        const parent = after.includes(`结论 ${index} node`);
+        const child = after.includes(`第 ${index} 条子项`);
+        assert.equal(parent, child, `条目${index}与子项必须同进同退（parent=${parent} child=${child}）`);
+    }
     assert.equal(compaction.parseEntries('memory', after).length + result.evicted.length, 6);
+    setLimits();
+});
+
+/* ═══════════════ 8b) MEMORY 叶子条目合并（编号连续、子项不动） ═══════════════ */
+await check('MEMORY 叶子条目合并：保留编号、重排空洞、带子项与其它分组不动', async () => {
+    setLimits();
+    const leaf = (index) => `结论 ${index} node v22.23.3 装配站里的临时文件不放进仓库`;
+    const raw = [
+        '# MEMORY.md — 项目记忆',
+        '',
+        '## 结论区',
+        '',
+        `1. ${leaf(1)}`,
+        `2. ${leaf(2)}`,
+        `3. ${leaf(3)}`,
+        `4. ${leaf(4)}`,
+        '5. 带子项的条目 node v22.23.3',
+        '   - 子项 A 不许丢',
+        '',
+        '## 别的分组',
+        '',
+        '1. 无关条目甲 node v1',
+        '2. 别的分组不参与合并 node v2',
+        '',
+    ].join('\n');
+    writeFileSync(memoryPath, raw, 'utf8');
+    rmSync(indexPath, { force: true });
+    rmSync(locksPath, { force: true });
+    setLimits({ maxProjectChars: memoryLimitFor(raw, 0.9) });
+    const before = sha(memoryPath);
+
+    const preview = await compaction.compact('memory', {
+        cwd: projectRoot,
+        dryRun: true,
+        callModel: async () => '叶子结论合并 node v22.23.3',
+    });
+    assert.ok(preview.merged.length >= 1, `dry 也要算出合并计划：${JSON.stringify(preview.merged)}`);
+    assert.equal(sha(memoryPath), before, 'dry 绝不落盘');
+
+    const result = await compaction.compact('memory', {
+        cwd: projectRoot,
+        callModel: async (prompt) => {
+            assert.match(prompt, /MEMORY\.md/, 'MEMORY 的合并提示词应写 MEMORY.md');
+            return '叶子结论合并 node v22.23.3';
+        },
+    });
+    assert.ok(result.merged.length >= 1, `应发生 MEMORY 合并：${JSON.stringify(result)}`);
+    const after = memoryText();
+    assert.ok(after.includes('带子项的条目 node v22.23.3'), '带子项的条目必须原样留着');
+    assert.ok(after.includes('子项 A 不许丢'), '子项一个字都不许丢');
+    assert.ok(after.includes('别的分组不参与合并 node v2'), '没被合并的分组一字不改');
+    // 结论区分组：合并后应在「编号 1」上，带子项那条顺延成 2（不得出现 1,5 这种空洞）
+    const sectionBlock = after.split('## 别的分组')[0];
+    const numbers = sectionBlock.split('\n')
+        .map((line) => /^(\d+)\.\s+/.exec(line))
+        .filter((match) => match !== null)
+        .map((match) => Number(match[1]));
+    assert.deepEqual(numbers, [1, 2], `结论区编号应连续，实际 ${numbers.join(',')}`);
+    assert.match(sectionBlock, /^1\. 叶子结论合并/m, '合并结果要带上编号');
+    assert.match(after.split('## 别的分组')[1], /^1\. 无关条目甲/m, '别的分组编号不动');
     setLimits();
 });
 
@@ -627,7 +713,219 @@ await check('dryRun：只出计划不落盘', async () => {
     assert.equal(sha(factPath), before, 'dryRun 绝不落盘');
 });
 
-/* ══════════════════ 15) 插件接线：/memory-compact 命令 + 面板路由 ══════════════════
+/* ═══════════════ 15) 报告与 no-op（ISSUE-001 · P0） ═══════════════ */
+await check('no-op 绝不写盘：只有尾部空行被归一化不算压缩', async () => {
+    setLimits();
+    const lines = Array.from({ length: 4 }, (_, index) => `- 条目${index + 1} node v${index + 1}.0.0 装配站里的临时文件与草稿不放进仓库，也不写进记忆`);
+    // 故意用两个换行结尾：旧实现会把它归一化成一个，然后 backup + write + audit
+    const raw = `# FACT.md\n\n## 环境\n\n${lines.join('\n')}\n\n`;
+    resetFact(raw, 1.2);
+    rmSync(indexPath, { force: true });
+    resetAudit();
+    const before = sha(factPath);
+    const result = await compaction.compact('fact', { callModel: null });
+    assert.equal(result.changed, false, JSON.stringify(result.reason));
+    assert.equal(result.written, false);
+    assert.equal(result.evicted.length, 0);
+    assert.equal(sha(factPath), before, 'no-eviction 不许写盘（尾部空行归一化也不是压缩）');
+    assert.equal(compaction.readAudit(1000).length, 0, 'no-op 不该产生审计记录');
+    setLimits();
+});
+
+await check('索引缺失且 ≥100% ⇒ 如实报「缺元数据」并给出 seed 命令（不再说「已达淘汰上限」）', async () => {
+    setLimits();
+    const lines = Array.from({ length: 3 }, (_, index) => `- 条目${index + 1} node v${index + 1}.0.0 装配站里的临时文件与草稿不放进仓库，也不写进记忆`);
+    const raw = `# FACT.md\n\n## 环境\n\n${lines.join('\n')}\n`;
+    resetFact(raw, 1.1);
+    rmSync(indexPath, { force: true });
+    const before = sha(factPath);
+    const result = await compaction.compact('fact', { callModel: null });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'MEMORY_BUDGET_EXCEEDED');
+    assert.equal(result.diagnostics?.reason, 'index-missing', JSON.stringify(result.diagnostics));
+    assert.equal(result.diagnostics?.missingMetadata, 3);
+    assert.match(result.message, /缺元数据/);
+    assert.match(result.message, /memory-compact fact seed/, '要告诉用户下一步怎么修');
+    assert.doesNotMatch(result.message, /已达淘汰上限/, '0 个候选不许说成删满上限');
+    assert.equal(sha(factPath), before);
+    setLimits();
+});
+
+await check('全部锁定 ⇒ 文案说「已锁定」而不是「缺元数据」', async () => {
+    setLimits();
+    const now = Date.now();
+    const lines = Array.from({ length: 2 }, (_, index) => `- 锁定${index + 1} node v${index + 1}.0.0 装配站里的临时文件与草稿不放进仓库，也不写进记忆`);
+    const raw = `# FACT.md\n\n## 环境\n\n${lines.join('\n')}\n`;
+    resetFact(raw, 1.1);
+    const records = lines.map((text) => ({ text, firstSeen: now - 100 * 86400000, hits: 0, confidence: 'low' }));
+    writeIndex(records);
+    for (const record of records)
+        locks.setLock('fact', store.entryId(record.firstSeen, record.text));
+    const result = await compaction.compact('fact', { callModel: null });
+    assert.equal(result.ok, false);
+    assert.equal(result.diagnostics?.protectedLock, 2);
+    assert.match(result.message, /已锁定/);
+    assert.doesNotMatch(result.message, /缺元数据/);
+    for (const record of records)
+        locks.unsetLock('fact', store.entryId(record.firstSeen, record.text));
+    setLimits();
+});
+
+/* ═══════════════ 16) 索引回填 seed（ISSUE-001 · P1） ═══════════════ */
+await check('seed：dry 只算计划；真回填写冷元数据（mtime / hits=0 / low）；重跑保留已有记录', async () => {
+    setLimits();
+    const lines = Array.from({ length: 6 }, (_, index) => `- 手写条目${index + 1} node v${index + 1}.0.0 装配站里的临时文件与草稿不放进仓库，也不写进记忆`);
+    const raw = `# FACT.md\n\n## 环境\n\n${lines.join('\n')}\n`;
+    writeFileSync(factPath, raw, 'utf8');
+    rmSync(indexPath, { force: true });
+    rmSync(locksPath, { force: true });
+
+    const dry = compaction.seedMetadata('fact', { dryRun: true });
+    assert.equal(dry.ok, true, JSON.stringify(dry));
+    assert.equal(dry.seeded, 6);
+    assert.equal(dry.written, false);
+    assert.equal(dry.entries.length, 6);
+    assert.equal(readdirSync(memoryDir).includes('index.json'), false, 'dry 不许写 index.json');
+
+    const seeded = compaction.seedMetadata('fact');
+    assert.equal(seeded.ok, true, JSON.stringify(seeded));
+    assert.equal(seeded.seeded, 6);
+    assert.equal(seeded.written, true);
+    const mtime = Math.round(statSync(factPath).mtimeMs);
+    assert.equal(seeded.firstSeen, mtime, 'firstSeen 应取文件 mtime（视为冷数据）');
+    const records = JSON.parse(readFileSync(indexPath, 'utf8')).entries;
+    assert.equal(Object.keys(records).length, 6);
+    for (const meta of Object.values(records)) {
+        assert.equal(meta.firstSeen, mtime);
+        assert.equal(meta.lastHit, mtime);
+        assert.equal(meta.hits, 0);
+        assert.equal(meta.confidence, 'low');
+        assert.equal(meta.scope, 'fact');
+    }
+
+    // 再跑一次：全都有记录了 ⇒ seeded 0，已有记录不动
+    const again = compaction.seedMetadata('fact', { now: 1 });
+    assert.equal(again.seeded, 0);
+    assert.equal(again.alreadyIndexed, 6);
+    assert.equal(again.written, false);
+    assert.equal(JSON.parse(readFileSync(indexPath, 'utf8')).entries[Object.keys(records)[0]].firstSeen, mtime, '已有记录不许被覆盖');
+    setLimits();
+});
+
+await check('seed 之后真删：最多 5 条、水位不再 ≥100%，evicted 非空', async () => {
+    setLimits();
+    const lines = Array.from({ length: 8 }, (_, index) => `- 手写条目${index + 1} node v${index + 1}.0.0 装配站里的临时文件与草稿不放进仓库，也不写进记忆`);
+    const raw = `# FACT.md\n\n## 环境\n\n${lines.join('\n')}\n`;
+    writeFileSync(factPath, raw, 'utf8');
+    rmSync(indexPath, { force: true });
+    setLimits({ maxFactBytes: factLimitFor(raw, 1.3) });
+    assert.ok(factRatio() >= 1);
+    compaction.seedMetadata('fact');
+    resetAudit();
+    const result = await compaction.compact('fact', { callModel: null });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.ok(result.evicted.length > 0 && result.evicted.length <= 5, `淘汰 ${result.evicted.length} 条`);
+    assert.ok(result.ratio < 1, `压完应不再超限，实际 ${result.ratio}`);
+    assert.ok(result.ratio >= 0.75 - 1e-9, `不许跌破 75%，实际 ${result.ratio}`);
+    assert.equal(compaction.readAudit(1000).length, 1, '真删必须留审计');
+    setLimits();
+});
+
+await check('syncIndexAfterWrite：未变条目保留元数据、新条目建记录、孤儿被清（P2）', () => {
+    setLimits();
+    const raw1 = '# FACT.md\n\n## 环境\n\n- 条目甲 node v1.0.0 装配站里的临时文件不放进仓库\n- 条目乙 node v2.0.0 装配站里的临时文件不放进仓库\n';
+    writeFileSync(factPath, raw1, 'utf8');
+    rmSync(indexPath, { force: true });
+    assert.equal(store.syncIndexAfterWrite('fact', factPath, raw1, { now: 5000 }), true);
+    let entries = JSON.parse(readFileSync(indexPath, 'utf8')).entries;
+    assert.equal(Object.keys(entries).length, 2, JSON.stringify(entries));
+    for (const meta of Object.values(entries)) {
+        assert.equal(meta.firstSeen, 5000);
+        assert.equal(meta.hits, 1);
+        assert.equal(meta.confidence, 'medium');
+    }
+
+    // 原文保留 + 新加一条 ⇒ 老的两条 firstSeen 不变，新的一条用 now
+    const raw2 = `${raw1}- 条目丙 node v3.0.0 装配站里的临时文件不放进仓库\n`;
+    writeFileSync(factPath, raw2, 'utf8');
+    assert.equal(store.syncIndexAfterWrite('fact', factPath, raw2, { now: 9000 }), true);
+    entries = JSON.parse(readFileSync(indexPath, 'utf8')).entries;
+    assert.equal(Object.keys(entries).length, 3);
+    assert.equal(Object.values(entries).filter((meta) => meta.firstSeen === 5000).length, 2, '未变条目要保留原元数据');
+    assert.equal(Object.values(entries).filter((meta) => meta.firstSeen === 9000).length, 1, '新条目用 now');
+
+    // 删掉一条 ⇒ 它的记录成孤儿，prune 掉（索引只留还存在于正文里的）
+    const raw3 = '# FACT.md\n\n## 环境\n\n- 条目乙 node v2.0.0 装配站里的临时文件不放进仓库\n- 条目丙 node v3.0.0 装配站里的临时文件不放进仓库\n';
+    writeFileSync(factPath, raw3, 'utf8');
+    assert.equal(store.syncIndexAfterWrite('fact', factPath, raw3, { now: 12000 }), true);
+    entries = JSON.parse(readFileSync(indexPath, 'utf8')).entries;
+    assert.equal(Object.keys(entries).length, 2, JSON.stringify(entries));
+    setLimits();
+});
+
+/* ═══════ 16b) MEMORY 顶层 bullet（真实项目记忆的常见写法） ═══════ */
+await check('parseEntries：MEMORY 认顶层 bullet，跳过子项与「## 速查」', () => {
+    const raw = [
+        '# MEMORY.md — 项目记忆',
+        '',
+        '## 一、结论',
+        '',
+        '- 顶层条目甲 node v1.0.0',
+        '  - 子项甲（不算条目）',
+        '- 顶层条目乙 node v2.0.0',
+        '',
+        '## 速查',
+        '',
+        '- 命令：node test/run-all.ps1',
+        '',
+    ].join('\n');
+    const entries = compaction.parseEntries('memory', raw);
+    assert.deepEqual(entries.map((entry) => entry.text), ['顶层条目甲 node v1.0.0', '顶层条目乙 node v2.0.0']);
+    assert.deepEqual(entries[0].lines, [4, 5], '子项要算进这条的行号（4 基 0）');
+    assert.equal(entries[0].bullet, true);
+});
+
+await check('整篇 bullet 的 MEMORY：seed 回填 6 条，淘汰时子项跟着走、标题保留', async () => {
+    setLimits();
+    const items = Array.from({ length: 6 }, (_, index) => `- 顶层条目${index + 1} node v${index + 1}.0.0 装配站里的临时文件与草稿不放进仓库，也不写进记忆\n  - 子项${index + 1} 必须一起走`);
+    const raw = `# MEMORY.md — 项目记忆\n\n## 一、结论\n\n${items.join('\n')}\n`;
+    writeFileSync(memoryPath, raw, 'utf8');
+    rmSync(indexPath, { force: true });
+    rmSync(locksPath, { force: true });
+    setLimits({ maxProjectChars: memoryLimitFor(raw, 1.3) });
+    const seeded = compaction.seedMetadata('memory', { cwd: projectRoot });
+    assert.equal(seeded.seeded, 6, JSON.stringify(seeded));
+    const result = await compaction.compact('memory', { cwd: projectRoot, callModel: null });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.ok(result.evicted.length > 0, JSON.stringify(result));
+    const after = memoryText();
+    assert.ok(after.includes('# MEMORY.md'), '标题必须留着');
+    for (const index of [1, 2, 3, 4, 5, 6]) {
+        const parent = after.includes(`顶层条目${index} node`);
+        const child = after.includes(`子项${index} 必须一起走`);
+        assert.equal(parent, child, `条目${index}与子项必须同进同退（parent=${parent} child=${child}）`);
+    }
+    setLimits();
+});
+
+await check('store.deleteEntry / replaceEntry：顶层 bullet 条目保留 bullet 形式、删时连子项', async () => {
+    setLimits();
+    const raw = '# MEMORY.md — 项目记忆\n\n## 一、结论\n\n- 条目甲 node v1\n  - 子项甲\n- 条目乙 node v2\n';
+    writeFileSync(memoryPath, raw, 'utf8');
+    rmSync(indexPath, { force: true });
+    const idA = store.entryId('', '条目甲 node v1');
+    const replaced = await store.replaceEntry('memory', idA, '- 条目甲改写 node v9', { cwd: projectRoot });
+    assert.equal(replaced.written, true, JSON.stringify(replaced));
+    assert.match(memoryText(), /^- 条目甲改写 node v9$/m, '替换后要保留 bullet，不能变成 undefined. 或编号');
+    assert.ok(memoryText().includes('子项甲'), '替换只动首行，子项保留');
+    const idB = store.entryId('', '条目乙 node v2');
+    const deleted = await store.deleteEntry('memory', idB, { cwd: projectRoot });
+    assert.equal(deleted.deleted, true);
+    assert.ok(!memoryText().includes('条目乙'), '条目本身要删掉');
+    setLimits();
+});
+
+/* ══════════════════ 17) 插件接线：/memory-compact 命令 + 面板路由 ══════════════════
  * 只在仓库源码那一轮跑（第 10 步跑已装份时用 PERSONA_MEMORY_STORE_ENTRY 指路，
  * 而这里要 import 仓库的 lib/index.js + schemastery，不混用）。 */
 if (process.env.PERSONA_MEMORY_STORE_ENTRY === undefined) {
@@ -648,6 +946,16 @@ if (process.env.PERSONA_MEMORY_STORE_ENTRY === undefined) {
                 return () => { };
             },
         };
+        const registeredTools = new Map();
+        const toolsRegistry = { register(spec) { registeredTools.set(spec.name, spec); return () => { }; } };
+        const llmCalls = [];
+        const llm = {
+            async *stream(options) {
+                llmCalls.push(options);
+                yield { type: 'text-delta', text: 'node v22.23.3；adb 用 platform-tools\\adb.exe' };
+                yield { type: 'finish', kind: 'stop' };
+            },
+        };
         const scopes = [];
         const fakeCtx = {
             get: (name) => {
@@ -655,6 +963,12 @@ if (process.env.PERSONA_MEMORY_STORE_ENTRY === undefined) {
                     return commands;
                 if (name === 'webServer')
                     return webServer;
+                if (name === 'llm')
+                    return llm;
+                if (name === 'tools')
+                    return toolsRegistry;
+                if (name === 'agentDefaultModel')
+                    return { currentSelection: () => ({ provider: 'default-provider', model: 'default-model' }) };
                 return undefined;
             },
             inject: (deps, callback) => {
@@ -674,11 +988,31 @@ if (process.env.PERSONA_MEMORY_STORE_ENTRY === undefined) {
         assert.equal(registeredCommand.name, 'memory-compact');
         assert.ok(Array.isArray(scopes) && scopes.includes('commands'), 'commands 应通过 ctx.inject 等就绪');
         const agent = { session: { header: { cwd: projectRoot } } };
-        const run = (rawInput) => registeredCommand.handler({ rawInput, agent });
+        // 会话模型继承用：requestHeader() 是宿主唯一持久化「本会话路由」的地方
+        const sessionAgent = {
+            session: {
+                header: { cwd: projectRoot },
+                requestHeader: () => ({ config: { provider: 'session-provider', model: 'session-model' } }),
+            },
+        };
+        const run = (rawInput, target = agent) => registeredCommand.handler({ rawInput, agent: target });
 
-        const usage = await run('');
-        assert.equal(usage.kind, 'error');
-        assert.match(usage.text, /用法/);
+        // 不带参数 ⇒ 默认压缩当前项目的 MEMORY.md（不是用法错误）
+        const bare = '# MEMORY.md — 项目记忆\n\n1. 一条很短的结论\n';
+        writeFileSync(memoryPath, bare, 'utf8');
+        const beforeDefault = sha(memoryPath);
+        const noArg = await run('');
+        assert.equal(noArg.kind, 'success', JSON.stringify(noArg));
+        assert.match(noArg.text, /MEMORY\.md/);
+        assert.doesNotMatch(noArg.text, /用法/);
+        assert.equal(sha(memoryPath), beforeDefault, '水位不足时默认命令不许改文件');
+
+        // 只给 dry 也走默认作用域（内存里预览，不落盘）
+        const dryOnly = await run('dry');
+        assert.equal(dryOnly.kind, 'success', JSON.stringify(dryOnly));
+        assert.match(dryOnly.text, /\[dry\] MEMORY\.md/);
+        assert.equal(sha(memoryPath), beforeDefault, 'dry 绝不落盘');
+
         const unknown = await run('bogus');
         assert.equal(unknown.kind, 'error');
         assert.match(unknown.text, /用法/);
@@ -698,18 +1032,47 @@ if (process.env.PERSONA_MEMORY_STORE_ENTRY === undefined) {
         const memory = await run('memory dry');
         assert.equal(memory.kind, 'success');
         assert.match(memory.text, /MEMORY\.md/);
-        assert.match(memory.text, /人工整理/, 'MEMORY 只淘汰，要提示人工整理');
+        assert.match(memory.text, /叶子条目/, 'MEMORY 只合并叶子条目，提示要说清楚');
 
         const all = await run('all dry');
         assert.equal(all.kind, 'success');
         assert.match(all.text, /FACT\.md/);
         assert.match(all.text, /MEMORY\.md/);
 
-        // 关闭时命令必须直接拒绝（默认关闭 ⇒ 一切压缩入口都不动）
+        /* ── LLM 路线：配置留空 ⇒ 继承会话模型；会话拿不到 ⇒ 宿主默认模型 ── */
+        writeFileSync(factPath, buildFact({ env: [ENV_A, ENV_B], targetBytes: 1000 }), 'utf8');
+        llmCalls.length = 0;
+        const merged = await run('fact dry', sessionAgent);
+        assert.equal(merged.kind, 'success', JSON.stringify(merged));
+        assert.ok(llmCalls.length >= 1, '配置留空也应调 llm（继承会话模型）');
+        assert.equal(llmCalls[0].provider, 'session-provider', '应继承会话的 provider');
+        assert.equal(llmCalls[0].model, 'session-model', '应继承会话的 model');
+
+        // 会话没有 requestHeader（还没跑过请求）⇒ 退宿主默认模型
+        llmCalls.length = 0;
+        await run('fact dry');
+        assert.equal(llmCalls[0]?.provider, 'default-provider', '没有会话路由时退默认模型');
+        assert.equal(llmCalls[0]?.model, 'default-model');
+
+        // 配置显式填了 ⇒ 配置优先于会话
+        plugin.apply(fakeCtx, {
+            compactionEnabled: true,
+            compactProvider: 'cfg-provider',
+            compactModel: 'cfg-model',
+            maxFactBytes: LIMITS.maxFactBytes,
+            maxFactLines: LIMITS.maxFactLines,
+            maxProjectChars: LIMITS.maxProjectChars,
+        });
+        llmCalls.length = 0;
+        await run('fact dry', sessionAgent);
+        assert.equal(llmCalls[0]?.provider, 'cfg-provider', '显式配置应优先');
+        plugin.apply(fakeCtx, { compactionEnabled: true, maxFactBytes: LIMITS.maxFactBytes, maxFactLines: LIMITS.maxFactLines, maxProjectChars: LIMITS.maxProjectChars });
+
+        // 关闭时命令必须直接拒绝（默认开启，但显式关掉后一切压缩入口都不动）
         plugin.apply(fakeCtx, { compactionEnabled: false, maxFactBytes: LIMITS.maxFactBytes, maxFactLines: LIMITS.maxFactLines, maxProjectChars: LIMITS.maxProjectChars });
         const disabled = await run('fact');
         assert.equal(disabled.kind, 'error');
-        assert.match(disabled.text, /未启用/);
+        assert.match(disabled.text, /已关闭/);
 
         // 面板路由：三个路径都注册上了，GET 返回状态信封
         assert.ok(routes.has('/persona-memory/api/memory/compaction'), `路由应有 compaction 状态：${[...routes.keys()]}`);
@@ -742,6 +1105,71 @@ if (process.env.PERSONA_MEMORY_STORE_ENTRY === undefined) {
         assert.ok(!unlock.json.compaction.locked.some((item) => item.key === 'fact:abc'));
         const badLock = await readJson(routes.get('/persona-memory/api/memory/lock'), 'POST', { id: '' });
         assert.equal(badLock.status, 400, '缺 id 应该是 400 而不是崩');
+
+        /* ── ISSUE-001：命令如实反映失败 + seed 回填（0.8.0 修复） ── */
+        plugin.apply(fakeCtx, { compactionEnabled: true, maxFactBytes: LIMITS.maxFactBytes, maxFactLines: LIMITS.maxFactLines, maxProjectChars: 600 });
+        const overLines = Array.from({ length: 6 }, (_, index) => `结论 ${index + 1} node v${index + 1}.0.0 装配站里的临时文件与草稿不放进仓库`);
+        const overRaw = `# MEMORY.md — 项目记忆\n\n${overLines.map((text, index) => `${index + 1}. ${text}`).join('\n')}\n`;
+        writeFileSync(memoryPath, overRaw, 'utf8');
+        rmSync(indexPath, { force: true });
+        setLimits({ maxProjectChars: memoryLimitFor(overRaw, 1.3) });
+
+        const firstRun = await run('memory');
+        assert.equal(firstRun.kind, 'error', JSON.stringify(firstRun));
+        assert.match(firstRun.text, /缺元数据/);
+        assert.match(firstRun.text, /seed/);
+        assert.ok(firstRun.text.includes(memoryPath), `结果要带目标路径：${firstRun.text}`);
+
+        const seedDry = await run('memory seed dry');
+        assert.equal(seedDry.kind, 'success', JSON.stringify(seedDry));
+        assert.match(seedDry.text, /将回填 6 条/);
+        assert.equal(existsSync(indexPath), false, 'seed dry 不许写索引');
+
+        const seedReal = await run('memory seed');
+        assert.equal(seedReal.kind, 'success', JSON.stringify(seedReal));
+        assert.match(seedReal.text, /已回填 6 条/);
+        assert.equal(existsSync(indexPath), true, 'seed 要写出 index.json');
+        assert.equal(Object.keys(JSON.parse(readFileSync(indexPath, 'utf8')).entries).length, 6);
+
+        const plan = await run('memory dry');
+        assert.equal(plan.kind, 'success', JSON.stringify(plan));
+        assert.match(plan.text, /\[dry\] MEMORY\.md/);
+        assert.match(plan.text, /淘汰 [1-5] 条/, 'dry 要给出淘汰计划');
+        assert.match(plan.text, /将淘汰：/, 'dry 要列出将淘汰的条目');
+        assert.match(plan.text, /（score [\d.]+）/, '每条要给分数，便于人工判断');
+
+        const whole = await run('memory');
+        assert.equal(whole.kind, 'success', JSON.stringify(whole));
+        assert.match(whole.text, /淘汰 [1-5] 条/);
+
+        // all：FACT 无需压缩、MEMORY 失败 ⇒ 整体不许报 success，且逐项标明
+        writeFileSync(factPath, buildFact({ env: [ENV_A], targetBytes: 200 }), 'utf8');
+        writeFileSync(memoryPath, overRaw, 'utf8');
+        rmSync(indexPath, { force: true });
+        const partial = await run('all');
+        assert.equal(partial.kind, 'error', JSON.stringify(partial));
+        assert.match(partial.text, /FACT\.md：水位/, '成功的 scope 也要照常报');
+        assert.match(partial.text, /MEMORY\.md：[^\n]*缺元数据/);
+
+        /* ── P2：memory action=update（整篇写入）也要维护侧车索引 ── */
+        const memoryTool = registeredTools.get('memory');
+        assert.ok(memoryTool !== undefined, 'memory 工具应已注册');
+        writeFileSync(factPath, buildFact({ env: [ENV_A], targetBytes: 100 }), 'utf8');
+        rmSync(indexPath, { force: true });
+        const nextFact = `${readFileSync(factPath, 'utf8')}- 新写入的一条 node v9.9.9\n`;
+        await memoryTool.execute({ action: 'update', scope: 'global', content: nextFact }, { agent: { session: { header: { cwd: projectRoot } } } });
+        const factIndex = JSON.parse(readFileSync(indexPath, 'utf8')).entries;
+        const factRecords = Object.values(factIndex).filter((meta) => meta.scope === 'fact');
+        assert.ok(factRecords.length >= 2, `整篇写入后索引应有记录：${JSON.stringify(factIndex)}`);
+        assert.ok(factRecords.every((meta) => Number.isFinite(meta.firstSeen) && meta.hits >= 1));
+
+        const nextMemory = '# MEMORY.md — 项目记忆\n\n1. 项目条目甲 node v1\n2. 项目条目乙 node v2\n';
+        writeFileSync(memoryPath, '# MEMORY.md — 项目记忆\n\n1. 项目条目甲 node v1\n', 'utf8');
+        await memoryTool.execute({ action: 'update', scope: 'project', content: nextMemory }, { agent: { session: { header: { cwd: projectRoot } } } });
+        const memoryRecords = Object.values(JSON.parse(readFileSync(indexPath, 'utf8')).entries)
+            .filter((meta) => meta.scope === 'memory');
+        assert.equal(memoryRecords.length, 2, JSON.stringify(memoryRecords));
+        assert.ok(memoryRecords.every((meta) => meta.path === memoryPath), '项目条目要记 path');
 
         store.configureCompactor(null);
         setLimits();

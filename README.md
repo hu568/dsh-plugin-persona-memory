@@ -72,13 +72,13 @@ FACT.md 字节先做 `\r\n` → `\n` 归一化，与 `countLines()` 同口径。
 右侧栏「角色 / 记忆」标签页，HTTP 前缀由 `config.panelPath` 决定（默认 `/persona-memory`；客户端 `BASE` 写死，改前缀需两半同改）。
 
 - **角色**：列表、切换、编辑 name/description/SOUL/USER、新建、删除；>4 个时出现筛选；卡片上移/下移排序（写 `personas/.personas-order`）。
-- **记忆**：全局 FACT.md、项目 MEMORY.md 编辑。
+- **记忆**：全局 FACT.md、项目 MEMORY.md 编辑。项目记忆**跟随当前会话的工作区**：面板把主视图会话的 cwd 带到 `GET /api/state?cwd=…`，切换工作区后自动切到对应项目。**没有项目下拉框**——项目固定由工作区决定，避免出现“选中项和实际注入不一致”。
 - **日志**：最近条目、追加、检索（点 `#tag` 即搜）。
 - **交互**：计量条（行数/字节/字符，接近上限变琥珀、超限变红，分母为默认值）、未保存徽标 + 撤销、`Ctrl/Cmd+S` 保存、`Ctrl/Cmd+Enter` 追加、错误 toast。
 - **样式**：注入一张 `<style id="dsh-persona-memory-panel-style">`，类名 `.dpm-*`；同页面重载不刷新 CSS，验收请整页刷新。
 
 ```
-GET  /persona-memory/api/state
+GET  /persona-memory/api/state?cwd=<当前工作区>   # cwd 可省略（旧客户端）
 POST /persona-memory/api/persona/{show,use,save,delete,order}
 POST /persona-memory/api/memory/save
 POST /persona-memory/api/journal/{append,search}
@@ -149,22 +149,44 @@ POST /persona-memory/api/settings/item        { id, value }
 | `maxFactLines` | `100` | 全局 FACT.md 行数硬上限 |
 | `maxFactBytes` | `8000` | 全局 FACT.md 字节硬上限（UTF-8） |
 | `maxProjectChars` | `8000` | 项目 MEMORY.md 字符硬上限 |
-| `compactionEnabled` | `false` | **压缩管线总开关（0.8.0）**：关闭时写路径与 0.7.0 逐字节相同 |
-| `compactProvider` | `''` | 合并用的 provider（空 ⇒ 不做 LLM 合并，只淘汰） |
-| `compactModel` | `''` | 合并用的 model（空 ⇒ 同上） |
+| `compactionEnabled` | `true` | **压缩管线总开关（0.8.0）**：默认开启，`/memory-compact` 与写前水位压缩都可用；关闭时写路径与 0.7.0 逐字节相同 |
+| `compactProvider` | `''` | 合并用的 provider（空 ⇒ **继承会话模型**；见下节） |
+| `compactModel` | `''` | 合并用的 model（空 ⇒ 同上；与 provider 必须同时填才生效） |
 | `compactKeepBackups` | `5` | `memory/backups/` 里每份文件保留的备份数 |
 | `panelPath` | `/persona-memory` | 面板 HTTP 前缀 |
 
 `personaEnabled` / `memoryEnabled` 现在是**默认值**：设置页把用户显式设过的开关写进 `injection.json`，覆盖层优先。`globalMemory` / `projectMemory` 在覆盖层里各自独立，但默认都取 `memoryEnabled`。
 
-## 压缩管线（0.8.0 · 默认关闭）
+## 压缩管线（0.8.0 · 默认开启）
 
-水位 85% → FACT 合并（LLM）→ 仍 ≥100% 淘汰（最多 5 条，投影到 ≤75%）→ 仍 ≥100% 返回 `MEMORY_BUDGET_EXCEEDED`。MEMORY.md 只淘汰、不合并。
+水位 85% → 合并（LLM）→ 仍 ≥100% 淘汰（最多 5 条，投影到 ≤75%）→ 仍 ≥100% 返回 `MEMORY_BUDGET_EXCEEDED`。
 
-- 手动：`/memory-compact <fact|memory|all> [dry]`、`/memory-compact rollback <yyyyMMdd-HHmmss>`
+**85% 与 100% 是两件事**：85% 只是「进入压缩流程」的门槛（此时只合并）；真正删条目要求合并后仍 **≥100%**。所以 7998/8000 字符（99.975%）**不会删任何东西**，这是设计而不是失效。
+
+**没有合并、也没有淘汰时绝不写盘**：`splitLines` / `joinLines` 会把「结尾多一个空行」归一化掉，那不是压缩 —— 不写文件、不备份、不记审计（0.8.0 修）。
+
+合并规则：
+- **FACT.md**：同一 `## 分组` 里语义相近的 2–10 条 `- ` 条目交给 LLM 合并成一条（保留版本号/路径等具体值，结果必须变短）。
+- **MEMORY.md**：条目 = 编号行（`1.`）**或顶层（缩进 0）的 `- ` 列表项**（真实项目记忆常常整篇 bullet 化；更深缩进的 `- ` 是子项）。只合并「同一分组里**没有子项**的叶子条目」：编号条目合并后**保留编号与缩进**并把空洞重排成连续编号，bullet 条目合并后仍是 `- `；**带子项的条目只淘汰、绝不合并**（合并会拆坏层级）；`## 速查` 里的列表项是参考数据，不参与合并/淘汰/回填。
+
+### 合并用哪个模型
+
+1. 配置里显式填了 `compactProvider` + `compactModel` ⇒ 用它；
+2. 留空 ⇒ **继承会话模型**：读本会话最近一次请求的 `session.requestHeader().config`（provider/model）；
+3. 会话还没跑过请求（拿不到）⇒ 退宿主的默认模型（`agentDefaultModel` 服务）。
+
+三处都拿不到 ⇒ 这次只淘汰、不合并（不会因为没有模型就失败）。
+
+默认开启（0.7.1 起）：`/memory-compact` 装上即可用，不再需要先改配置；没配 `compactProvider` / `compactModel` 时按「继承会话模型」取路线（0.8.0 起）。想恢复 0.7.0 的纯写入行为，把 `compactionEnabled` 设为 `false`（命令与面板入口会一并拒绝）。
+
+- 手动：`/memory-compact`（不带参数 = 压缩当前工作区的项目 `MEMORY.md`）、`/memory-compact [fact|memory|all] [dry] [seed]`、`/memory-compact rollback <yyyyMMdd-HHmmss>`
+- 手动命令的结果里带**实际目标路径**；任一 scope 失败 ⇒ 命令 `kind: 'error'`（`all` 里一个成功一个失败时逐项标明，不误报 success）
+- `seed`：先回填侧车索引（见下），只写 `memory/index.json`，不删任何正文；`seed dry` 只列计划。终于能压「手写 / 整篇写入」的老文件了
 - 面板：`GET /api/memory/compaction`、`POST /api/memory/lock`、`POST /api/memory/unlock`
 - 保护区只认**人工锁定**（`memory/locks.json`）与正文里的 `<!-- keep -->`；`★` 不是保护信号
-- 侧车索引 `memory/index.json` 缺失/损坏 ⇒ 淘汰整体跳过（宁可不压缩，也不盲删）
+- 侧车索引 `memory/index.json` 缺失/损坏 ⇒ 淘汰整体跳过（宁可不压缩，也不盲删）；命令会如实说「缺元数据 N 条」并提示先 `seed`
+- 索引维护：`memory action=update` 与面板保存这些**整篇写入**也会同步索引（0.8.0 起）—— 未变条目保留原元数据、新条目 `firstSeen=now / hits=1 / confidence=medium`、孤儿自动清掉
+- `seed` 回填的是**冷元数据**：`firstSeen = lastHit = 文件 mtime`、`hits = 0`、`confidence = low`（所有手写条目分数接近 ⇒ 同分时**从文件尾部开始删**：开头是身份/铁律/当前结论，尾部是历史与索引；先 `dry` 看计划，真删仍受锁定 / `<!-- keep -->` / 备份 / 回滚保护）
 - 审计 `memory/compaction.jsonl`；备份 `memory/backups/<file>-<yyyyMMdd-HHmmss>.bak`（保留 5 份，SHA256 校验后才回滚）
 
 ## 首次运行
@@ -187,10 +209,12 @@ node test/settings.test.mjs
 node test/fact-limit.test.mjs
 node test/fact-bytes.test.mjs
 node test/project-limit.test.mjs
+node test/panel-workspace.test.mjs
+node test/compaction.test.mjs
 pwsh -File test/run-all.ps1   # 其余需真实宿主渲染器/cordis 的用例
 ```
 
-覆盖：注入作用域、插值安全（`interpolate: false`）、注入开关与设置项注册表、FACT 行数/字节上限、项目字符上限与 8000/8001 边界不变量、真实 `renderPrompt()`、真实 cordis 全链路、快照续接、真实 `$DSH_HOME` 数据。
+覆盖：注入作用域、插值安全（`interpolate: false`）、注入开关与设置项注册表、FACT 行数/字节上限、项目字符上限与 8000/8001 边界不变量、面板跟随工作区（`/api/state?cwd=` + 工作区注册表 + 压缩默认开启）、真实 `renderPrompt()`、真实 cordis 全链路、快照续接、真实 `$DSH_HOME` 数据、压缩管线（合并/淘汰/回填/无操作不写盘/命令 kind）。
 
 ## 已知边界
 
@@ -198,7 +222,7 @@ pwsh -File test/run-all.ps1   # 其余需真实宿主渲染器/cordis 的用例
 - 设置页开关只管**注入**：关掉全局记忆后，`memory action=read/update, scope=global` 仍然可用（工具契约仍按开关裁剪提示，不会主动引导）。
 - 设置页的扩展项注册表是**进程内**的：附属插件没装载时项自然消失；值持久化由注册方自己负责，本插件只存三个内置开关。
 - 快照不随会话删除回收，`snapshots/` 会留小 JSON。
-- 面板「项目」列表来自本进程见过的会话 cwd。
+- 面板项目记忆固定跟随主视图会话的工作区（DSH 工作区注册表 + 会话 cwd 解析，0.7.1 起），没有手动选择项目的下拉框。
 - 历史遗留的超限 FACT.md / MEMORY.md 不会被自动改写，`read` 附警告，其后写入被拒。
 - 日志不注入，契约指针是提示不是保证，稳定结论请写进 FACT.md。
 

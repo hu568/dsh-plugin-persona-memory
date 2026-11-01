@@ -59,7 +59,7 @@ Write-Host '=== 2/10 settings.test.mjs（仓库源码，纯 node：注入开关 
 & $plainNode (Join-Path $repo 'test\settings.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'settings.test.mjs (repo)' }
 
-Write-Host '=== 3/10 fact-limit.test.mjs + store.test.mjs + store-api.test.mjs + compaction.test.mjs（仓库源码，纯 node：FACT.md 行数硬上限 / store 子路径 / 0.7.0 新 API / 压缩管线）' -ForegroundColor Cyan
+Write-Host '=== 3/10 fact-limit + store + store-api + compaction + panel-workspace（仓库源码，纯 node：FACT 行数上限 / store 子路径与新 API / 压缩管线 / 面板跟随工作区）' -ForegroundColor Cyan
 & $plainNode (Join-Path $repo 'test\fact-limit.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'fact-limit.test.mjs (repo)' }
 
@@ -69,9 +69,13 @@ if ($LASTEXITCODE -ne 0) { $failures += 'store.test.mjs (repo)' }
 & $plainNode (Join-Path $repo 'test\store-api.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'store-api.test.mjs (repo)' }
 
-# 压缩管线（P4 / 0.8.0）：默认关闭，纯 node + 临时 DSH_HOME + 假 callModel。
+# 压缩管线（P4 / 0.8.0）：默认开启，纯 node + 临时 DSH_HOME + 假 callModel。
 & $plainNode (Join-Path $repo 'test\compaction.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'compaction.test.mjs (repo)' }
+
+# 面板跟随 DSH 工作区 + 压缩默认开启（0.7.1）：纯 node + 假 webServer/commands。
+& $plainNode (Join-Path $repo 'test\panel-workspace.test.mjs')
+if ($LASTEXITCODE -ne 0) { $failures += 'panel-workspace.test.mjs (repo)' }
 
 Write-Host '=== 4/10 fact-bytes.test.mjs（仓库源码，纯 node：FACT.md 字节硬上限）' -ForegroundColor Cyan
 & $plainNode (Join-Path $repo 'test\fact-bytes.test.mjs')
@@ -107,7 +111,7 @@ if (-not (Test-Path $installed)) {
 } else {
     $entry = 'file:///' + (($installed -replace '\\', '/') + '/lib/index.js')
 
-    foreach ($pure in @('settings', 'fact-limit', 'fact-bytes', 'project-limit')) {
+    foreach ($pure in @('settings', 'fact-limit', 'fact-bytes', 'project-limit', 'panel-workspace')) {
         $env:PERSONA_MEMORY_ENTRY = $entry
         & $plainNode (Join-Path $repo "test\$pure.test.mjs")
         if ($LASTEXITCODE -ne 0) { $failures += "$pure.test.mjs (installed)" }
