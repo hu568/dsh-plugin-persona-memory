@@ -6,7 +6,7 @@ DSH 的**角色设定 + 长期记忆**管理插件，注册在**宿主组合**�
 |---|---|
 | 许可证 | MIT，见 [LICENSE](./LICENSE) |
 | 安装规格 | `github:hu568/dsh-plugin-persona-memory` |
-| 实测 DSH | `0.1.5-rc.1` ~ `0.2.0-rc.2` |
+| 实测 DSH | `0.1.5-rc.1` ~ `0.2.2-rc.1`（末项为 Android / proot Linux 实测） |
 | peer 要求 | `cordis >=4.0.0-rc <5`、`@deepseek-ai/dsh-tools`、`@deepseek-ai/dsh-system-prompt` |
 | 运行依赖 | `schemastery`（别名安装 `npm:@deepseek-ai/schemastery@3.18.2`） |
 
@@ -21,6 +21,24 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 ```
 
 卸载不删除 `$DSH_HOME/personas`、`$DSH_HOME/memory`。更新时若安装规格字符串不变会报 `ambiguous-install`，先 `remove` 再 `add`。
+
+### 装完不用重启，改源码才要重启
+
+`dsh plugin add` 除了装依赖，还会把包名追加进 profile 的 `dsh.profile.bundles`；运行中的引擎由 HMR
+监听这份清单，重载对应的组合层。实测（DSH `0.2.2-rc.1`，Android / proot Linux）：
+
+- 引擎进程（同一 PID）没有重启，安装完成后**下一次模型请求**的系统提示词里就出现了
+  `memory:soul` / `memory:user` / `memory:facts`，`memory` / `persona` 工具同轮可用；
+- 首条快照随即写入 `$DSH_HOME/memory/snapshots/<sessionId>.json`，`personas/` 与 `memory/` 同时 seed；
+- 但改 `node_modules/` 里的 `lib/*.js` 仍然要重启：HMR 只监听 profile 清单与补丁文件，不监听
+  `node_modules`，ESM 也有模块加载缓存。
+
+### 安装时两条容易被误读的输出
+
+| 输出 | 真实含义 |
+|---|---|
+| `Issues with peer dependencies found`（`cordis` / `@deepseek-ai/dsh-tools` / `@deepseek-ai/dsh-system-prompt`） | 这三者不在 profile 的 `node_modules` 里就会报，**可忽略**：本插件运行时不解析它们，`lib/*.js` 的裸模块引用只有 `schemastery`（别名安装，已 hoist 到 profile），其余全是 `node:*`。它们是给宿主看的契约与类型。 |
+| 客户端半没出现在界面上 | 右侧栏「角色 / 记忆」与设置页「记忆」注册在 `sidebar.right.pane.tab` / `settings.section`，是 **Harness Web UI** 的槽位。dsh-go 这类 Flutter 原生客户端没有这些槽位，手机上只有宿主侧生效（工具 + 提示词注入 + HTTP 路由），面板本身不渲染；要看面板请到 `http://127.0.0.1:<port>` 的网页端。 |
 
 ## 数据平面
 
