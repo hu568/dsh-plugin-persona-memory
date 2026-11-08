@@ -8,7 +8,7 @@
  *
  * 单独跑：node test/ensure-deps.mjs
  */
-import { existsSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,17 +31,28 @@ function candidateRoots() {
     return roots;
 }
 
-/** 在候选根里找包目录；找不到返回 null。 */
+/** 在候选根里找包目录；找不到返回 null。
+ *  schemastery 有两个发布名：裸名 `schemastery`（别名安装）与真实包 `@deepseek-ai/schemastery`。
+ *  两种都要认，但链接名固定用裸名，因为插件源码 import 的是 `schemastery`。 */
 function locate(pkg, roots) {
+    const names = pkg === 'schemastery' ? ['schemastery', '@deepseek-ai/schemastery'] : [pkg];
     for (const root of roots) {
-        const dir = join(root, ...pkg.split('/'));
-        if (existsSync(dir) && existsSync(join(dir, 'package.json'))) return dir;
+        for (const name of names) {
+            const dir = join(root, ...name.split('/'));
+            if (existsSync(dir) && existsSync(join(dir, 'package.json'))) return dir;
+        }
     }
     return null;
 }
 
 function link(pkg, src) {
     const dest = join(nodeModules, ...pkg.split('/'));
+    // 悬空符号链接（目标被删）existsSync 为 false，但 symlinkSync 会 EEXIST —— 先清掉。
+    try {
+        if (lstatSync(dest).isSymbolicLink()) unlinkSync(dest);
+    } catch {
+        /* 不存在，正常 */
+    }
     if (existsSync(dest)) return 'ok';
     mkdirSync(dirname(dest), { recursive: true });
     try {
