@@ -13,8 +13,11 @@ import { readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureDeps } from './ensure-deps.mjs';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
+
+ensureDeps();
 const files = readdirSync(testDir)
     .filter((f) => f.endsWith('.test.mjs'))
     .sort();

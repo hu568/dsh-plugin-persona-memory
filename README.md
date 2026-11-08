@@ -270,6 +270,7 @@ node test/run-all.mjs   # 一条命令跑全量：逐个跑 test/*.test.mjs 并�
 ```
 
 `test/run-all.mjs` 只用 node 内置模块，Windows / Linux / Android(proot) 通用，不依赖 PowerShell 或 Electron。
+开跑前会调用 `test/ensure-deps.mjs`：缺 `schemastery` / 宿主包时自动从本机现有副本建符号链接（缺才补，失败只警告）。
 需要真实宿主包（`cordis` / `@deepseek-ai/dsh-system-prompt`）的用例由 `test/_host-paths.mjs` 自动探测：
 `DSH_ASAR_ROOT` → `/opt/dsh/node_modules/@deepseek-ai` → `$DSH_HOME/profiles/*/node_modules/@deepseek-ai` → 旧 Windows asar 路径。
 单独跑某个用例：`node test/scope.test.mjs`。
