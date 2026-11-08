@@ -14,15 +14,15 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveHostModules } from './_host-paths.mjs';
 
 /** 仓库源码入口：从本测试文件自身位置推导，别写死绝对路径（插件搬过家）。 */
 const REPO_ENTRY = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js')).href;
 
-const ASAR = process.env.DSH_ASAR_ROOT
-    ?? 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/@deepseek-ai';
+const HOST = resolveHostModules();
 
-const { Context } = await import(`file:///${ASAR}/cordis/lib/index.js`);
-const SystemPrompt = (await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`)).default;
+const { Context } = await import(pathToFileURL(join(HOST, 'cordis', 'lib', 'index.js')).href);
+const SystemPrompt = (await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href)).default;
 
 /* ── 隔离的 DSH_HOME，样本里塞满 {{…}} ── */
 const home = mkdtempSync(join(tmpdir(), 'persona-memory-e2e-'));
@@ -46,7 +46,7 @@ writeFileSync(join(personasDir, '.active'), 'default\n', 'utf8');
 writeFileSync(join(projectRoot, 'MEMORY.md'), '# 项目\n\n本项目用 {{项目变量}}。\n', 'utf8');
 
 const personaMemory = await import(process.env.PERSONA_MEMORY_ENTRY ?? REPO_ENTRY);
-const { renderPrompt } = await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`);
+const { renderPrompt } = await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href);
 
 /* ── 起一个真实的 Context，挂真实的 system-prompt 服务 ── */
 const ctx = new Context();

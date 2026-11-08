@@ -14,14 +14,17 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveHostModules } from './_host-paths.mjs';
 
 /** 仓库源码入口：从本测试文件自身位置推导，别写死绝对路径（插件搬过家）。 */
 const REPO_ENTRY = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js')).href;
 
-const ASAR = process.env.DSH_ASAR_ROOT
-    ?? 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/@deepseek-ai';
-// asar 内的包必须走 file:// URL（裸盘符路径会被 ESM loader 当成非法 scheme 拒绝）。
-const { renderPrompt } = await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`);
+// 宿主包目录跨平台探测（DSH_ASAR_ROOT / /opt/dsh / profile / 旧 Windows 路径），
+// 再统一用 pathToFileURL 拼 URL，避免 asar 与裸盘符路径的差异。
+const HOST = resolveHostModules();
+const { renderPrompt } = await import(
+    pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href
+);
 
 /* ── 隔离的 DSH_HOME，样本里故意塞满 {{…}} ── */
 const home = mkdtempSync(join(tmpdir(), 'persona-memory-host-'));

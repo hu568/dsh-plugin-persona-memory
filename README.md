@@ -265,17 +265,14 @@ DSH 不监听 `node_modules`，Node 缓存 ESM 模块。改 `lib/*.js` 必须重
 
 ## 测试
 
-```powershell
-node test/scope.test.mjs
-node test/settings.test.mjs
-node test/fact-limit.test.mjs
-node test/fact-bytes.test.mjs
-node test/project-limit.test.mjs
-node test/panel-workspace.test.mjs
-node test/revision.test.mjs
-node test/compaction.test.mjs
-pwsh -File test/run-all.ps1   # 其余需真实宿主渲染器/cordis 的用例
+```bash
+node test/run-all.mjs   # 一条命令跑全量：逐个跑 test/*.test.mjs 并汇总
 ```
+
+`test/run-all.mjs` 只用 node 内置模块，Windows / Linux / Android(proot) 通用，不依赖 PowerShell 或 Electron。
+需要真实宿主包（`cordis` / `@deepseek-ai/dsh-system-prompt`）的用例由 `test/_host-paths.mjs` 自动探测：
+`DSH_ASAR_ROOT` → `/opt/dsh/node_modules/@deepseek-ai` → `$DSH_HOME/profiles/*/node_modules/@deepseek-ai` → 旧 Windows asar 路径。
+单独跑某个用例：`node test/scope.test.mjs`。
 
 覆盖：注入作用域、插值安全（`interpolate: false`）、注入开关与设置项注册表、FACT 行数/字节上限、项目字符上限与 8000/8001 边界不变量、面板跟随工作区（`/api/state?cwd=` + 工作区注册表 + 压缩默认开启）、真实 `renderPrompt()`、真实 cordis 全链路、快照续接、真实 `$DSH_HOME` 数据、压缩管线（合并/淘汰/回填/无操作不写盘/命令 kind）、整篇覆盖的乐观锁（revision 冲突拒写且文件一字不动 / 读后别人插入不丢 / 并发两写者只成功一个 / 工具层 read-front-update 闭环）。
 

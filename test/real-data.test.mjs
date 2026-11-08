@@ -15,12 +15,13 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveHostModules, resolveRealHome } from './_host-paths.mjs';
 
 /** 仓库源码入口：从本测试文件自身位置推导，别写死绝对路径（插件搬过家）。 */
 const REPO_ENTRY = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js')).href;
 
-const ASAR = process.env.DSH_ASAR_ROOT
-    ?? 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/@deepseek-ai';
+// 宿主包目录跨平台探测；asar 与裸盘符路径统一走 pathToFileURL。
+const HOST = resolveHostModules();
 
 /* 用真实数据的**副本**跑，但写操作落在临时 DSH_HOME。
  *
@@ -28,7 +29,7 @@ const ASAR = process.env.DSH_ASAR_ROOT
  * `memory/snapshots/`（`real-root.json` 等）—— 测试不该污染用户数据目录。
  * 现在把真实记忆/角色**拷进临时 home**：既保留「用真实数据验证」的价值，
  * 又保证零写入真实目录。 */
-const REAL_HOME = process.env.DSH_REAL_HOME ?? 'C:/Users/Administrator/.dsh';
+const REAL_HOME = resolveRealHome();
 const home = mkdtempSync(join(tmpdir(), 'persona-memory-real-'));
 process.env.DSH_HOME = home;
 
@@ -48,9 +49,9 @@ if (existsSync(factPath)) {
     console.log(`  · 真实 FACT.md 含 {{…}}：${readFileSync(factPath, 'utf8').includes('{{') ? '是' : '否'}`);
 }
 
-const { Context } = await import(`file:///${ASAR}/cordis/lib/index.js`);
-const SystemPrompt = (await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`)).default;
-const { renderPrompt } = await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`);
+const { Context } = await import(pathToFileURL(join(HOST, 'cordis', 'lib', 'index.js')).href);
+const SystemPrompt = (await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href)).default;
+const { renderPrompt } = await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href);
 
 const entry = process.env.PERSONA_MEMORY_ENTRY ?? REPO_ENTRY;
 const personaMemory = await import(entry);
@@ -93,7 +94,15 @@ if (firstEntry !== undefined) {
         /* 最后一行是坏数据，跳过探测 */
     }
 }
-assert.match(rootText, /正文未注入/, '契约里应有「日志正文未注入 + 主动 search」的指针');
+/* 契约指针随真实日志条数变化：有日志说「正文未注入」，空日志说「目前为空」。 */
+const journalCount = journalRaw.split(/\r?\n/).filter((l) => l.trim()).length;
+assert.match(
+    rootText,
+    journalCount > 0 ? /正文未注入/ : /目前为空/,
+    journalCount > 0
+        ? '契约里应有「日志正文未注入 + 主动 search」的指针'
+        : '空日志时契约应说明「目前为空」并引导 append',
+);
 /* 仍要验证 {{…}} 不会被插值炸掉：真实 FACT.md / SOUL.md 里有就断言。 */
 const factRaw = existsSync(factPath) ? readFileSync(factPath, 'utf8') : '';
 if (factRaw.includes('{{')) {

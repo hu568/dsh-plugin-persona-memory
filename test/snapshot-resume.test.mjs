@@ -16,12 +16,12 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveHostModules } from './_host-paths.mjs';
 
 /** 仓库源码入口：从本测试文件自身位置推导，别写死绝对路径（插件搬过家）。 */
 const REPO_ENTRY = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js')).href;
 
-const ASAR = process.env.DSH_ASAR_ROOT
-    ?? 'C:/Users/Administrator/AppData/Local/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules/@deepseek-ai';
+const HOST = resolveHostModules();
 
 const home = mkdtempSync(join(tmpdir(), 'persona-memory-snap-'));
 process.env.DSH_HOME = home;
@@ -57,9 +57,9 @@ const snapshot = {
 };
 writeFileSync(join(memoryDir, 'snapshots', `${sessionId}.json`), JSON.stringify(snapshot, null, 2), 'utf8');
 
-const { Context } = await import(`file:///${ASAR}/cordis/lib/index.js`);
-const SystemPrompt = (await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`)).default;
-const { renderPrompt } = await import(`file:///${ASAR}/dsh-system-prompt/lib/index.js`);
+const { Context } = await import(pathToFileURL(join(HOST, 'cordis', 'lib', 'index.js')).href);
+const SystemPrompt = (await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href)).default;
+const { renderPrompt } = await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href);
 const personaMemory = await import(process.env.PERSONA_MEMORY_ENTRY ?? REPO_ENTRY);
 
 const ctx = new Context();
