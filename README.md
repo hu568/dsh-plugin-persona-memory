@@ -72,11 +72,50 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 
 - **只加不改不删**：`supersedeEntry()` 只在行尾加注释，正文、行号、缩进、编号一字不动 ⇒ 文件字节**只增不减**；`restoreEntry()` 摘掉注释就恢复成 `active`。失效条目留在文件里可审计、可恢复，真删除只发生在压缩层确实到了预算上限的时候。
 - **不注入**：`renderFacts()` 在 `clip()` 之前对 FACT / 项目原文调 `stripSuperseded()`（保留标题、空行、`## 速查`），过滤只发生在渲染层——快照里存的仍是**原文**，`watermark` 与写入闸口也按原文算。所以失效条目照样占着文件预算，这也正是它该优先被淘汰的理由。
-- **优先淘汰**：压缩层给 `superseded` / `archived` 条目打 0 分（正常条目最低也有 0.04），排序与目标水位逻辑一行没改；缺元数据的失效条目照样可删（状态注释比侧车索引更确定）。合并 / 逐条精简**不碰**失效条目——改写会把行尾注释丢掉，等于让它悄悄复活。
+- **优先淘汰**：压缩层给 `superseded` / `archived` 条目打 0 分（正常条目最低也有 0.02），排序与目标水位逻辑一行没改；缺元数据的失效条目照样可删（状态注释比侧车索引更确定）。合并 / 逐条精简**不碰**失效条目——改写会把行尾注释丢掉，等于让它悄悄复活。
 - **容错口径**：注释残缺、`status` 拼错、同一行重复注释、正文里出现类似字符串 ⇒ 一律按 `active` 处理且**不改写原文**。误判成 active 只多注入一条过时结论，误判成失效则一条真结论永远进不了提示词，两者代价不对称。
 - **加注释不改变条目 id**：切分条目时先剥注释、`text` 永远是纯正文，`entryId()` 因此不变——侧车索引元数据、淘汰候选、`{id}` 定位全部继续成立。`findEntry()` 等的返回条目新增 `state` 字段，旧字段不变。
 
 `supersedeEntry(scope, target, {by, at, cwd, expectedRevision})` / `restoreEntry(scope, target, options)` 的 `target` 支持 `{id}` / `{text}` / `{number}`（MEMORY 编号），与其它写入共用同一把按文件归一的写锁、写前备份（`backups/auto/`）、写后上限校验与 `expectedRevision` 乐观锁。找不到就是 `{ok:false, reason:'not-found'}`，**不猜**（包含匹配命中多条时带 `ambiguous: true`）。两者都只有 store API，没有新增 `memory` 工具动作；自动沉淀的 UPDATE 链路按契约 §6 走「先 ADD 新正文，成功后再 supersede 旧条目」。
+
+## 条目重要性：重要程度与访问回写（0.11.0）
+
+契约见仓库根 `DESIGN-memory-lifecycle.md` v3 §10–§12。**元数据不进正文**：正文会被
+`memory action=update` 整篇覆盖，行尾注释会在下一次整篇写入时被模型丢掉；而重要性丢了只是
+退回默认值，不该冒这个险。所以它躺在本来就有的侧车索引 `$DSH_HOME/memory/index.json` 里。
+
+```jsonc
+"9b3d239eeb": { "scope": "fact", "firstSeen": …, "lastHit": …, "hits": 1,
+                "confidence": "high", "importance": 70, "kind": "conclusion" }
+```
+
+| 项 | 约定 |
+|---|---|
+| `importance` | 0–100 整数，缺省 **50**；越界收敛、非法按缺省（写坏的字段不该让写入失败） |
+| `kind` | `conclusion` / `detail`，缺省 `conclusion`；只做观测，不参与筛选 |
+| 落盘 | 只在 `insertEntry` / `replaceEntry` / `setEntryImportance` / `touchEntries` 里改 |
+| 兼容 | 老索引没有这两个字段 ⇒ 读出来按缺省值，**不迁移、不改文件**；老主插件忽略 entry 里的 `importance` |
+
+写入侧：`insertEntry(scope, {text, confidence, importance, kind})`、`replaceEntry(scope, id, …)`。
+**改正文没带 importance ⇒ 沿用旧值**（把一条重要结论补个错别字，不该把它降成中等）。
+
+两个只动索引、不碰正文的接口：
+
+- `setEntryImportance(scope, target, importance, {cwd, at})`：`target` 支持索引 id / contentId / 正文；
+  找不到返回 `{ok:false, reason:'not-found'}`，**不猜、不新建条目**；人工写的条目（索引里还没有）
+  会补一条元数据（`hits=0`，它确实还没被用过）。
+- `touchEntries([{scope, id}], {at})`：访问回写，`hits+1`、`lastHit=at`。作用域不明/未知 id 静默跳过。
+  自动沉淀在判 `NOOP`（旧条目被重新确认）或成功 `UPDATE` 时调用；失败绝不影响本轮结果。
+
+**淘汰评分随之升级**（`DESIGN v3 §12`）：
+
+```
+score = 0.30×近因 + 0.20×命中 + 0.10×置信度 + 0.30×重要性 + 0.10×人工标记
+```
+
+近因从「90 天线性窗口」改成 `exp(-ageDays/90)`：线性衰减在第 91 天直接归零，一条每年用一次的
+核心约定会被常年压在 0 分，比昨天刚写的临时发现更容易被删。缺元数据仍返回 1（永不自动淘汰），
+失效条目仍压到 0 分优先淘汰，这两条纪律不变。
 
 ## 注入内容与作用域
 
@@ -375,6 +414,18 @@ node test/run-all.mjs   # 一条命令跑全量：逐个跑 test/*.test.mjs 并�
 - **写前压缩失败可观测**：`logger.warn` + `MEMORY_BUDGET_EXCEEDED.details.compactionFailure = { code, message }`。
 - **persona id 校验**：所有按 id 的动作都要求 `[a-z0-9][a-z0-9-]*`，角色目录必须位于角色库之下。
 - **库级信任门**：新增 `trustProjectFromRepo`（默认 `true`）与 `store.gitOriginOf()`，项目记忆可能随仓库分发时追加「来源不可信」告示。
+
+## 变更（0.11.0）
+
+- **重要性元数据（侧车索引）**：`index.json` 的条目记录新增 `importance`（0–100，缺省 50）与 `kind`；
+  `insertEntry` / `replaceEntry` 接受这两个字段，`replaceEntry` 未带 importance 时沿用旧值。
+  正文格式零变化（`DESIGN v3 §10`）。
+- **`setEntryImportance` / `touchEntries`**：只改索引、不碰正文、不占正文写锁；
+  前者找不到目标返回 `not-found` 不猜，后者做访问回写（`hits+1` / `lastHit`）。
+- **淘汰评分**：改为 `0.30 近因 + 0.20 命中 + 0.10 置信度 + 0.30 重要性 + 0.10 人工锁`，
+  近因用 90 天半衰期指数衰减（`DESIGN v3 §12`）。
+- **兼容**：老索引缺字段按缺省值读，不迁移；老 `insertEntry` 调用（字符串 / 无新字段）行为不变。
+- **测试**：新增 `test/importance.test.mjs`（12 项），并把 `scoreEntry` 用例改成五项加权 + 半衰期单调性。
 
 ## 变更（0.10.0）
 

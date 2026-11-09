@@ -5,7 +5,7 @@
  *  1. 水位 < 85% ⇒ 跳过（`below-watermark`）；
  *  2. FACT 合并保留具体值（版本号 / 路径），合并后水位下降且能回滚；
  *  3. 合并结果 >120 字 / 把具体值压没了 ⇒ 拒绝，一个字节都不写；
- *  4. 淘汰按评分（0.4 近因 + 0.3 命中 + 0.2 置信度 + 0.1 人工标记）从低到高，最多 5 条；
+ *  4. 淘汰按评分（0.3 近因 + 0.2 命中 + 0.1 置信度 + 0.3 重要性 + 0.1 人工标记）从低到高，最多 5 条；
  *  5. 保护区：显式锁定 + `<!-- keep -->` + 当前工作区条目 —— 永不自动淘汰；
  *  6. 侧车索引缺失/损坏 ⇒ 淘汰整体跳过（宁可不压缩也不盲删）；
  *  7. 75% 是**下限**：不会为了缓冲把水位一次砸穿；
@@ -225,13 +225,26 @@ await check('合并结果 >120 字 ⇒ 拒绝，端到端一个字节都不写',
 });
 
 /* ═════════════════════════ 4) 评分与淘汰顺序 ═════════════════════════ */
-await check('scoreEntry：四项加权，缺元数据 ⇒ 1（永不淘汰）', () => {
+await check('scoreEntry：五项加权，缺元数据 ⇒ 1（永不淘汰）', () => {
     const now = Date.UTC(2026, 9, 31);
-    const top = compaction.scoreEntry({ lastHit: now, firstSeen: now, hits: 10, confidence: 'high', locked: true }, now);
+    const top = compaction.scoreEntry({ lastHit: now, firstSeen: now, hits: 10, confidence: 'high', importance: 100, locked: true }, now);
     assert.equal(top, 1);
-    const cold = compaction.scoreEntry({ lastHit: now - 200 * 86400000, firstSeen: now - 200 * 86400000, hits: 0, confidence: 'low' }, now);
-    assert.ok(cold < 0.3, `冷条目分数应很低，实际 ${cold}`);
-    assert.ok(compaction.scoreEntry({ lastHit: now, firstSeen: now, hits: 10, confidence: 'high' }, now) < top, '人工标记应抬高分数');
+    const cold = compaction.scoreEntry({ lastHit: now - 200 * 86400000, firstSeen: now - 200 * 86400000, hits: 0, confidence: 'low', importance: 0 }, now);
+    assert.ok(cold < 0.15, `冷条目分数应很低，实际 ${cold}`);
+    assert.ok(compaction.scoreEntry({ lastHit: now, firstSeen: now, hits: 10, confidence: 'high', importance: 100 }, now) < top, '人工标记应抬高分数');
+    // 0.11 · DESIGN v3 §12：重要性必须真的影响排序，缺省按 50（0.5）而不是 0。
+    const rest = { lastHit: now - 100 * 86400000, firstSeen: now - 100 * 86400000, hits: 2, confidence: 'medium' };
+    assert.ok(compaction.scoreEntry({ ...rest, importance: 100 }, now) > compaction.scoreEntry({ ...rest, importance: 0 }, now), '重要性应抬高分数');
+    assert.equal(
+        compaction.scoreEntry({ ...rest, importance: 50 }, now),
+        compaction.scoreEntry(rest, now),
+        'importance 缺失 = 50 分（保守的中间值）',
+    );
+    // 90 天半衰期：衰减是连续的，不是「90 天前一律 0」。
+    const older = compaction.scoreEntry({ ...rest, importance: 50, lastHit: now - 180 * 86400000, firstSeen: now - 180 * 86400000 }, now);
+    const newer = compaction.scoreEntry({ ...rest, importance: 50, lastHit: now - 90 * 86400000, firstSeen: now - 90 * 86400000 }, now);
+    assert.ok(newer > older, '半衰期：越近分数越高');
+    assert.ok(older > 0, '指数衰减不会在第 91 天直接归零');
     assert.equal(compaction.scoreEntry(null, now), 1);
     assert.equal(compaction.scoreEntry(undefined, now), 1);
     assert.equal(compaction.scoreEntry({}, now), 1, '字段全缺 ⇒ 保守满分');
