@@ -238,15 +238,34 @@ await check('readText：文件不存在返回 null；writeAtomic：建目录 + �
 });
 
 /* ── 7) 独立可用：只依赖 node 内置模块 + 导出名单 ── */
-await check('lib/store.js 只依赖 node 内置模块（不引 schemastery、不读 config）', () => {
-    const source = readFileSync(storePath, 'utf8');
-    const specifiers = [...source.matchAll(/\bfrom\s+'([^']+)'/g)].map((match) => match[1]);
-    assert.ok(specifiers.length > 0, '应至少 import 一个内置模块');
-    for (const specifier of specifiers) {
-        assert.ok(specifier.startsWith('node:'), `lib/store.js 不应依赖非内置模块：${specifier}`);
+await check('lib/store.js 的依赖闭包只有 node 内置与同目录纯函数模块（不引 schemastery、不读 config）', () => {
+    /* 0.10 · 条目生命周期：状态解析拆到同目录 `lib/entry-state.js`（零依赖纯函数），
+       store 用相对 import 引它。原断言「每个 specifier 都必须以 node: 开头」会把这个
+       合法拆分判红 —— 所以改成**按依赖闭包**校验，保留原意（不拉第三方包、不读宿主
+       配置）且更严：被引的相对模块本身也要过同样的检查。
+       为什么这条纪律重要：store.js 是附属插件与面板共用的写入口，import 它不该顺带把
+       一个依赖树拉进来（已装份里两份文件同目录，相对引用照常解析）。 */
+    const seen = new Set();
+    const pending = [storePath];
+    while (pending.length > 0) {
+        const file = pending.pop();
+        if (seen.has(file))
+            continue;
+        seen.add(file);
+        const source = readFileSync(file, 'utf8');
+        assert.ok(!/schemastery/.test(source), `${file} 不应引用 schemastery`);
+        assert.ok(!/\bConfig\b/.test(source), `${file} 不应引用 Config`);
+        for (const match of source.matchAll(/\bfrom\s+'([^']+)'/g)) {
+            const specifier = match[1];
+            if (specifier.startsWith('node:'))
+                continue;
+            assert.ok(specifier.startsWith('./'), `${file} 不应依赖非内置模块：${specifier}`);
+            const resolved = fileURLToPath(new URL(specifier, pathToFileURL(file)));
+            assert.ok(existsSync(resolved), `${file} 的相对依赖应存在：${specifier}`);
+            pending.push(resolved);
+        }
     }
-    assert.ok(!/schemastery/.test(source), 'lib/store.js 不应引用 schemastery');
-    assert.ok(!/\bConfig\b/.test(source), 'lib/store.js 不应引用 Config');
+    assert.ok(seen.size >= 2, 'store.js 应至少 import 一个模块（node 内置 + 同目录 entry-state.js）');
 });
 
 await check('import(pathToFileURL(lib/store.js)) 可用，导出名单与常量齐全', async () => {

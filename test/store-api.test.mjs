@@ -208,7 +208,7 @@ await check('templates()：形状齐全，promptFragment 含四条硬规则 + FA
 });
 
 /* ── 4) validateEntry：01 §3.3 的逐条样本 ── */
-await check('validateEntry：8 条违规样本按表处理（drop / journal）', () => {
+await check('validateEntry：11 条违规样本按表处理（drop / journal）', () => {
     const cases = [
         // [scope, 文本, 期望 demote, 期望 reason 片段]
         ['fact', `${'这一段结论非常长'.repeat(20)}`, 'drop', '超过 120 字'],
@@ -222,7 +222,6 @@ await check('validateEntry：8 条违规样本按表处理（drop / journal）',
         ['fact', '手机号 13800138000', 'drop', '敏感串'],
         ['fact', '私钥 -----BEGIN RSA PRIVATE KEY----- MIIE -----END RSA PRIVATE KEY-----', 'drop', '敏感串'],
         ['fact', '最后发现补丁不生效', 'journal', '过程叙述'],
-        ['memory', '只跟某个目录有关的结论', 'journal', '项目根'],
     ];
     for (const [scope, text, demote, reason] of cases) {
         const verdict = store.validateEntry(scope, text, { cwd: join(home, 'no-project') });
@@ -231,6 +230,16 @@ await check('validateEntry：8 条违规样本按表处理（drop / journal）',
         assert.ok(verdict.reason.includes(reason), `${text} 的 reason 应含「${reason}」，实际「${verdict.reason}」`);
     }
     assert.equal(cases.length >= 8, true);
+
+    /* 0.8.6：memory 条目不再要求「cwd 下已有 MEMORY.md」——cwd 就是项目根，首次写入即创建 */
+    assert.equal(
+        store.validateEntry('memory', '只跟某个目录有关的结论', { cwd: join(home, 'no-project') }).ok,
+        true,
+        '缺 MEMORY.md 也应放行（自动沉淀要能长出第一份项目记忆）',
+    );
+    const noCwd = store.validateEntry('memory', '只跟某个目录有关的结论', { cwd: '' });
+    assert.equal(noCwd.ok, false);
+    assert.equal(noCwd.demote, 'journal');
 });
 
 await check('validateEntry：2 条正常样本放行（FACT / MEMORY 各一）', () => {

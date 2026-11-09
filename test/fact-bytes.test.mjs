@@ -66,13 +66,15 @@ const run = (args) => memory.execute(args, exec);
 /** 造一个「行数不超、字节超」的内容：单行超长。 */
 const bigLine = (bytes) => 'a'.repeat(bytes);
 
-/* ── 1) 行数没超、字节超了：拒绝写入，且磁盘不变 ── */
+/* ── 1) 行数没超、字节超了：拒绝写入，且磁盘不变 ──
+   0.9.0 · P1-3：闸口按**最终落盘文本**计 —— 正文 8000 字节 + 末位换行 = 落盘 8001 字节，
+   正好是「多一个换行就越界」的边界。 */
 const before = readFileSync(factPath, 'utf8');
 await assert.rejects(
-    () => run({ action: 'update', scope: 'global', content: bigLine(8001) }),
+    () => run({ action: 'update', scope: 'global', content: `${bigLine(8000)}\n` }),
     (error) => {
         assert.match(error.message, /硬上限 100 行 \/ 8000 字节/, '报错应写明双上限');
-        assert.match(error.message, /8001 字节/, '报错应写明实际字节数');
+        assert.match(error.message, /8001 字节/, '报错应写明实际字节数（含末位换行）');
         assert.match(error.message, /超出 1 字节/, '报错应写明超出多少字节');
         assert.ok(!/超出 \d+ 行/.test(error.message), '行数没超就不该报行数超限');
         assert.match(error.message, /scope=project/, '报错应把模型指向项目记忆');
@@ -83,12 +85,13 @@ await assert.rejects(
 );
 assert.equal(readFileSync(factPath, 'utf8'), before, '被拒绝的写入不得改动磁盘上的 FACT.md');
 
-/* ── 2) 恰好 8000 字节：通过（`<=` 语义） ── */
-const exactly8000 = bigLine(8000);
+/* ── 2) 恰好 8000 字节（含末位换行）：通过（`<=` 语义） ── */
+const exactly8000 = `${bigLine(7999)}\n`;
 const wrote = await run({ action: 'update', scope: 'global', content: exactly8000 });
 assert.match(wrote.text, /已写入全局记忆/, '恰好 8000 字节应写入成功');
 assert.match(wrote.text, /8000 字节/, '成功回执应报告字节数');
-assert.equal(readFileSync(factPath, 'utf8').trim(), exactly8000, '磁盘上的 FACT.md 应为 8000 字节正文');
+assert.equal(readFileSync(factPath, 'utf8'), exactly8000, '磁盘上的 FACT.md 应正好 8000 字节（含末位换行）');
+assert.equal(Buffer.byteLength(readFileSync(factPath, 'utf8'), 'utf8'), 8000, '落盘字节数必须 <= 上限');
 
 /* ── 3) 行数与字节都超：两项实际值都要出现 ── */
 const both = Array.from({ length: 120 }, (_, index) => `- 行 ${index + 1} ${'a'.repeat(80)}`).join('\n');
@@ -105,8 +108,8 @@ await assert.rejects(
 /* ── 4) 字节按 UTF-8 计：中文 3 字节 ── */
 await assert.rejects(
     () => run({ action: 'update', scope: 'global', content: '喵'.repeat(2700) }),
-    /8100 字节/,
-    '中文应按 UTF-8 3 字节/字计（2700 字 = 8100 字节）',
+    /8101 字节/,
+    '中文应按 UTF-8 3 字节/字计（2700 字 = 8100 字节，加末位换行 = 8101）',
 );
 const cjk = '喵'.repeat(2666); // 7998 字节
 assert.match(
@@ -148,9 +151,9 @@ await assert.rejects(
     'maxFactBytes 应覆盖默认值，且行数上限保持 100',
 );
 assert.match(
-    (await small.execute({ action: 'update', scope: 'global', content: bigLine(10) }, exec)).text,
+    (await small.execute({ action: 'update', scope: 'global', content: bigLine(9) }, exec)).text,
     /已写入全局记忆/,
-    '字节上限设为 10 时恰好 10 字节应通过',
+    '字节上限设为 10 时落盘恰好 10 字节（9 + 末位换行）应通过',
 );
 
 rmSync(home, { recursive: true, force: true });

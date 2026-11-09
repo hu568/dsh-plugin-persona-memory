@@ -91,7 +91,8 @@ await assert.rejects(
 assert.equal(readFileSync(factPath, 'utf8'), before, '被拒绝的写入不得改动磁盘上的 FACT.md');
 
 /* ── 4) 项目记忆不受行数限制 ── */
-const proj = await run({ action: 'update', scope: 'project', content: lines(500, '项目行') });
+// 0.9.0 起 scope=project 的 expectedRevision 必填；本用例只验证行数闸口，走显式 force 逃生口。
+const proj = await run({ action: 'update', scope: 'project', content: lines(500, '项目行'), force: true });
 assert.match(proj.text, /已写入项目记忆/, '项目记忆应能写入');
 assert.match(readFileSync(join(projectRoot, 'MEMORY.md'), 'utf8'), /项目行 500/, '项目记忆 500 行应完整落盘');
 

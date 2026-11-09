@@ -73,7 +73,7 @@ const chars = (count) => 'a'.repeat(count);
 /* ── 1) 超过 8000 字符：拒绝写入，且磁盘不变 ── */
 assert.ok(!existsSync(projectPath), '前置：MEMORY.md 此时还不存在');
 await assert.rejects(
-    () => run({ action: 'update', scope: 'project', content: chars(8001) }),
+    () => run({ action: 'update', scope: 'project', content: chars(8001), force: true }),
     (error) => {
         assert.match(error.message, /项目记忆 MEMORY\.md 有硬上限 8000 字符/, '报错应写明文件与上限');
         assert.match(error.message, /8001 字符/, '报错应写明实际字符数');
@@ -87,7 +87,8 @@ await assert.rejects(
 assert.ok(!existsSync(projectPath), '被拒绝的写入不得创建/改动 MEMORY.md');
 
 /* ── 2) 恰好 8000 字符：通过 ── */
-const wrote = await run({ action: 'update', scope: 'project', content: chars(8000) });
+// 0.9.0 起 scope=project 的 expectedRevision 必填；上限用例走显式 force 逃生口。
+const wrote = await run({ action: 'update', scope: 'project', content: chars(8000), force: true });
 assert.match(wrote.text, /已写入项目记忆/, '恰好 8000 字符应写入成功');
 assert.match(wrote.text, /8000 字符/, '成功回执应报告字符数');
 assert.equal(readFileSync(projectPath, 'utf8').trim(), chars(8000), '磁盘上应为 8000 字符正文');
@@ -95,7 +96,7 @@ assert.equal(readFileSync(projectPath, 'utf8').trim(), chars(8000), '磁盘上�
 /* ── 3) 已存在文件 + 超限写入：磁盘内容保持原样 ── */
 const before = readFileSync(projectPath, 'utf8');
 await assert.rejects(
-    () => run({ action: 'update', scope: 'project', content: chars(9000) }),
+    () => run({ action: 'update', scope: 'project', content: chars(9000), force: true }),
     /超出 1000 字符/,
     '超限写入应报出超出量',
 );
@@ -119,14 +120,14 @@ writeFileSync(projectPath, before, 'utf8'); // 还原，继续后面的断言
 // 3000 个中文 = 3000 字符（9000 字节）⇒ 按字符口径应通过
 const cjk = '喵'.repeat(3000);
 assert.match(
-    (await run({ action: 'update', scope: 'project', content: cjk })).text,
+    (await run({ action: 'update', scope: 'project', content: cjk, force: true })).text,
     /3000 字符/,
     '中文应按字符数计（3000 字 = 3000 字符），与注入侧 maxChars 同口径',
 );
 
 /* ── 5) 字符口径 = `clip()` 的口径：`trim()` 后长度，`\r\n` 算 2 个字符 ── */
 // 落盘 = "a\r\nb\r\nc\n"，`clip()` 那边是 `text.trim().length` ⇒ 7
-await run({ action: 'update', scope: 'project', content: 'a\r\nb\r\nc' });
+await run({ action: 'update', scope: 'project', content: 'a\r\nb\r\nc', force: true });
 const crlfRead = await run({ action: 'read' });
 assert.match(crlfRead.text, /7 字符 \/ 上限 8000 字符/, '字符数应与注入侧 clip() 逐字同口径（不归一化 \\r\\n）');
 
@@ -159,12 +160,12 @@ mod.apply(makeCtx(), { maxProjectChars: 5 });
 const small = tools.get('memory');
 assert.ok(small, '应注册 memory 工具（自定义项目上限）');
 await assert.rejects(
-    () => small.execute({ action: 'update', scope: 'project', content: chars(6) }, exec),
+    () => small.execute({ action: 'update', scope: 'project', content: chars(6), force: true }, exec),
     /硬上限 5 字符/,
     'maxProjectChars 应覆盖默认值',
 );
 assert.match(
-    (await small.execute({ action: 'update', scope: 'project', content: chars(5) }, exec)).text,
+    (await small.execute({ action: 'update', scope: 'project', content: chars(5), force: true }, exec)).text,
     /已写入项目记忆/,
     '上限设为 5 时恰好 5 字符应通过',
 );

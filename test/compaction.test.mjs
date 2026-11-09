@@ -1360,7 +1360,7 @@ if (process.env.PERSONA_MEMORY_STORE_ENTRY === undefined) {
 
         const nextMemory = '# MEMORY.md — 项目记忆\n\n1. 项目条目甲 node v1\n2. 项目条目乙 node v2\n';
         writeFileSync(memoryPath, '# MEMORY.md — 项目记忆\n\n1. 项目条目甲 node v1\n', 'utf8');
-        await memoryTool.execute({ action: 'update', scope: 'project', content: nextMemory }, { agent: { session: { header: { cwd: projectRoot } } } });
+        await memoryTool.execute({ action: 'update', scope: 'project', content: nextMemory, force: true }, { agent: { session: { header: { cwd: projectRoot } } } });
         const memoryRecords = Object.values(JSON.parse(readFileSync(indexPath, 'utf8')).entries)
             .filter((meta) => meta.scope === 'memory');
         assert.equal(memoryRecords.length, 2, JSON.stringify(memoryRecords));
