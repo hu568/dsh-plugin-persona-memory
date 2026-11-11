@@ -59,7 +59,7 @@ writeFileSync(join(memoryDir, 'snapshots', `${sessionId}.json`), JSON.stringify(
 
 const { Context } = await import(pathToFileURL(join(HOST, 'cordis', 'lib', 'index.js')).href);
 const SystemPrompt = (await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href)).default;
-const { renderPrompt } = await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href);
+const { renderPrompt, renderContextSnapshot } = await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href);
 const personaMemory = await import(process.env.PERSONA_MEMORY_ENTRY ?? REPO_ENTRY);
 
 const ctx = new Context();
@@ -73,16 +73,23 @@ const mf = ctx.plugin(personaMemory, {});
 await mf.await();
 assert.equal(mf.state, 2, '插件 fiber 应 ACTIVE');
 
-const renderFor = async (agent) => renderPrompt(await systemPrompt.assemble({ agent }));
+const renderFor = async (agent) => {
+    const assembly = await systemPrompt.assemble({ agent });
+    return { prompt: renderPrompt(assembly), context: renderContextSnapshot(assembly) };
+};
 const agent = {
     id: sessionId,
     session: { header: { cwd: projectRoot }, events: [{ type: 'user/message' }] },
 };
 
 /* ★ 关键断言：从磁盘快照回填 + 渲染，必须不抛错，且 {{…}} 原样保留。 */
-let text;
-await assert.doesNotReject(async () => { text = await renderFor(agent); },
+let rendered;
+await assert.doesNotReject(async () => { rendered = await renderFor(agent); },
     '含 {{变量}} 的**已固化快照**也必须能渲染（这正是用户重启/续接会话时走的路径）');
+const text = rendered.context;
+/* 0.12.0：角色与记忆走 runtime-context，system prompt 里不该再有它们。 */
+assert.ok(!rendered.prompt.includes('<soul '), '角色不应再进 system prompt');
+assert.ok(!rendered.prompt.includes('### 全局记忆'), '记忆不应再进 system prompt');
 assert.ok(text.includes('{{角色名}}'), '快照角色里的 {{角色名}} 应原样保留');
 assert.ok(text.includes('{{全局变量}}'), '快照全局记忆里的 {{全局变量}} 应原样保留');
 assert.ok(text.includes('{{项目变量}}'), '快照项目记忆里的 {{项目变量}} 应原样保留');
@@ -100,7 +107,8 @@ const childAgent = {
     id: sessionId,
     session: { header: { cwd: projectRoot, origin: 'subagent' }, events: [{ type: 'user/message' }] },
 };
-const childText = await renderFor(childAgent);
+const child = await renderFor(childAgent);
+const childText = child.context;
 assert.ok(childText.includes('{{项目变量}}'), '子代理应拿到项目记忆');
 assert.ok(!childText.includes('<soul '), '子代理不应拿到角色');
 assert.ok(!childText.includes('<journal '), '不应出现 <journal> 段落');

@@ -51,7 +51,7 @@ if (existsSync(factPath)) {
 
 const { Context } = await import(pathToFileURL(join(HOST, 'cordis', 'lib', 'index.js')).href);
 const SystemPrompt = (await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href)).default;
-const { renderPrompt } = await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href);
+const { renderPrompt, renderContextSnapshot } = await import(pathToFileURL(join(HOST, 'dsh-system-prompt', 'lib', 'index.js')).href);
 
 const entry = process.env.PERSONA_MEMORY_ENTRY ?? REPO_ENTRY;
 const personaMemory = await import(entry);
@@ -73,15 +73,22 @@ await mf.await();
 assert.equal(mf.state, 2, '插件 fiber 应 ACTIVE');
 
 /* ── 用真实 cwd 组装（D:\test1 是用户真实工作目录） ── */
-const renderFor = async (agent) => renderPrompt(await systemPrompt.assemble({ agent }));
+const renderFor = async (agent) => {
+    const assembly = await systemPrompt.assemble({ agent });
+    return { prompt: renderPrompt(assembly), context: renderContextSnapshot(assembly) };
+};
 const rootAgent = { id: 'real-root', session: { header: { cwd: 'D:\\test1' }, events: [{ type: 'user/message' }] } };
 const childAgent = { id: 'real-child', session: { header: { cwd: 'D:\\test1', origin: 'subagent' }, events: [{ type: 'user/message' }] } };
 
-let rootText;
-await assert.doesNotReject(async () => { rootText = await renderFor(rootAgent); },
+let root;
+await assert.doesNotReject(async () => { root = await renderFor(rootAgent); },
     '★ 用真实记忆数据 + 真实宿主渲染器，主会话组装必须不抛错（这就是用户崩溃的那条路径）');
+/* 0.12.0：角色与记忆走 runtime-context，system prompt 里不该再有它们。 */
+const rootText = root.context;
+assert.ok(!root.prompt.includes('<soul '), '角色不应再进 system prompt（0.12.0 改走运行时上下文）');
+assert.ok(!root.prompt.includes('### 全局记忆'), '记忆不应再进 system prompt');
 
-console.log('  · 主会话渲染成功，长度=%d', rootText.length);
+console.log('  · 主会话渲染成功：system=%d，上下文快照=%d', root.prompt.length, rootText.length);
 /* ★ 0.2.0 核心断言：真实的几十条日志**一条都不该进**提示词。 */
 assert.ok(!rootText.includes('<journal '), '不应再有 <journal> 段落');
 const firstEntry = journalRaw.split(/\r?\n/).filter((l) => l.trim()).pop();
@@ -110,7 +117,8 @@ if (factRaw.includes('{{')) {
 }
 
 /* ── 子代理：只注入项目记忆 ── */
-const childText = await renderFor(childAgent);
+const child = await renderFor(childAgent);
+const childText = child.context;
 assert.ok(!childText.includes('<soul '), '子代理不应注入角色 SOUL');
 assert.ok(!childText.includes('<user '), '子代理不应注入角色 USER');
 assert.ok(!childText.includes('<journal '), '不应有 <journal> 段落');

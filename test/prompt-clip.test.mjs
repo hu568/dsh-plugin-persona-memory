@@ -55,7 +55,11 @@ function makeCtx() {
             if (key === 'tools')
                 return { register(tool) { tools.set(tool.name, tool); return () => { }; } };
             if (key === 'systemPrompt')
-                return { getSectionOrder: () => 100, section(section) { sections.push(section); return () => { }; } };
+                return {
+                    getSectionOrder: () => 100,
+                    section(section) { sections.push(section); return () => { }; },
+                    context(section) { sections.push(section); return () => { }; },
+                };
             return undefined;
         },
     };

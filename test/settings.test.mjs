@@ -56,6 +56,10 @@ function makeCtx() {
                         sections.push(section);
                         return () => { };
                     },
+                    context(section) {
+                        sections.push(section);
+                        return () => { };
+                    },
                 };
             }
             return undefined;

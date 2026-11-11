@@ -3,9 +3,10 @@
 # 这里是宿主平面，不是 agent 预设平面——角色设定与记忆要对所有预设的每个会话
 # 生效，所以它必须和 `system-prompt` / `tools` 注册表同层。
 #
-# 注册的提示词段落名沿用 `memory:` 前缀（memory:soul / memory:user /
-# memory:facts）：用户自建的 router-standard 预设会在精简模式里
-# 剥掉除 `memory:*` 外的全部段落，沿用该前缀让角色与记忆在那里也能存活。
+# 注册的条目名沿用 `memory:` 前缀（memory:soul / memory:user / memory:facts）。
+# 0.12.0 起它们注册为 runtime-context（systemPrompt.context()）而不是 system 段落：
+# 宿主把它们渲染成一条 user 角色消息，由插件自己的 agent/pre-step 监听排到用户消息
+# 之前，从而不再与 1000~5000 号的工具说明段争 system prompt 的位置。
 # （0.1.x 还有第四段 `memory:journal`，0.2.0 起已整段移除：长期日志不再注入。）
 - insert:
     - id: persona-memory

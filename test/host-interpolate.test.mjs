@@ -62,6 +62,7 @@ mod.apply({
             return {
                 getSectionOrder: () => 0,
                 section(section) { registered.push(section); return () => { }; },
+                context(section) { registered.push(section); return () => { }; },
             };
         }
         return undefined;

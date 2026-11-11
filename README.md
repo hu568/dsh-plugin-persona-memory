@@ -29,7 +29,7 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 `dsh plugin add` 除了装依赖，还会把包名追加进 profile 的 `dsh.profile.bundles`；运行中的引擎由 HMR
 监听这份清单，重载对应的组合层。实测（DSH `0.2.2-rc.1`，Android / proot Linux）：
 
-- 引擎进程（同一 PID）没有重启，安装完成后**下一次模型请求**的系统提示词里就出现了
+- 引擎进程（同一 PID）没有重启，安装完成后**下一次模型请求**的运行时上下文快照里就出现了
   `memory:soul` / `memory:user` / `memory:facts`，`memory` / `persona` 工具同轮可用；
 - 首条快照随即写入 `$DSH_HOME/memory/snapshots/<sessionId>.json`，`personas/` 与 `memory/` 同时 seed；
 - 但改 `node_modules/` 里的 `lib/*.js` 仍然要重启：HMR 只监听 profile 清单与补丁文件，不监听
@@ -119,13 +119,19 @@ score = 0.30×近因 + 0.20×命中 + 0.10×置信度 + 0.30×重要性 + 0.10×
 
 ## 注入内容与作用域
 
-提示词段落紧贴部署人格之后：`memory:soul`（`<soul>` + 编辑契约）、`memory:user`（`<user>`）、`memory:facts`（`<memory>` 全局 + 项目 + 写入契约）。
+0.12.0 起角色与记忆**不走 system prompt**，改走宿主 `systemPrompt.context()`：三者被渲染成
+**一条 user 角色消息**（运行时上下文快照），由插件自己的 `agent/pre-step` 监听排到本轮消息
+最前面 —— 消息序列为 `[runtime-context, 用户消息, ...]`，即「系统提示词之后、用户消息之前」。
 
-| 段落 | 主会话 | 子代理会话 |
+为什么改：它们原先作为 system 段落排在 `DEPLOYMENT_PERSONA_PREFIX + 5/6/40`（最靠前），
+而工具说明段占 1000~5000 号 —— 几千字的强指令把前面的角色压没，角色扮演会被淹没。
+换通道后角色与工具说明不再争同一段文本的位置，也不再进入 system 前缀缓存。
+
+| 条目 | 主会话 | 子代理会话 |
 |---|---|---|
-| 角色 soul / user | ✅ | ❌ |
-| 全局 FACT.md | ✅ | ❌ |
-| 项目 MEMORY.md | ✅ | ✅ |
+| `memory:soul` 角色 soul | ✅ | ❌ |
+| `memory:user` 角色 user | ✅ | ❌ |
+| `memory:facts` 全局 FACT.md + 项目 MEMORY.md + 写入契约 | ✅ | 仅项目部分 |
 | JOURNAL.jsonl | ❌ | ❌ |
 
 子代理只拿项目记忆与项目版写入契约，可只读 `action=read` / `action=search` 查全局记忆；`subagentProjectOnly: false` 可回退为主会话一致。子代理判定读 `session.header`：`origin === 'subagent'`、`parentSession` 存在或 `delegationDepth > 0`。日志不注入，但契约里留指针（条数 + 正文未注入 + 要求主动 search）。
@@ -214,7 +220,7 @@ DSH「设置」里多一个 **记忆** 页（`settings.section`，id `persona-me
 
 | 开关 | 控制 |
 |---|---|
-| 角色设定 | `memory:soul` / `memory:user` 两段 |
+| 角色设定 | `memory:soul` / `memory:user` 两个条目 |
 | 全局记忆 | `memory:facts` 里的 `FACT.md` 部分与全局写入契约 |
 | 项目记忆 | `memory:facts` 里的项目 `MEMORY.md` 部分与项目写入契约（子代理也只看这个开关） |
 
