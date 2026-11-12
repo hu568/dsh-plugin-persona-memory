@@ -67,18 +67,18 @@ const lines = (count, prefix) => Array.from({ length: count }, (_, index) => `- 
 
 /* ── 1) 正好 100 行：写入成功 ── */
 const exactly100 = lines(100, '行');
-const wrote = await run({ action: 'update', scope: 'global', content: exactly100 });
+const wrote = await run({ action: 'update', scope: 'global', content: exactly100 , force: true });
 assert.match(wrote.text, /已写入全局记忆/, '正好 100 行应写入成功');
 assert.equal(readFileSync(factPath, 'utf8').trim().split('\n').length, 100, '磁盘上的 FACT.md 应为 100 行');
 
 /* ── 2) 末尾换行不算额外一行 ── */
-await run({ action: 'update', scope: 'global', content: `${exactly100}\n` });
+await run({ action: 'update', scope: 'global', content: `${exactly100}\n` , force: true });
 assert.equal(readFileSync(factPath, 'utf8').trim().split('\n').length, 100, '末尾换行不应把 100 行算成 101 行');
 
 /* ── 3) 101 行：拒绝写入，且磁盘不变 ── */
 const before = readFileSync(factPath, 'utf8');
 await assert.rejects(
-    () => run({ action: 'update', scope: 'global', content: lines(101, '行') }),
+    () => run({ action: 'update', scope: 'global', content: lines(101, '行') , force: true }),
     (error) => {
         assert.match(error.message, /硬上限 100 行/, '报错应写明上限');
         assert.match(error.message, /101 行/, '报错应写明实际行数');
@@ -122,12 +122,12 @@ mod.apply(makeCtx(), { maxFactLines: 3 });
 const small = tools.get('memory');
 assert.ok(small, '应注册 memory 工具（自定义上限）');
 await assert.rejects(
-    () => small.execute({ action: 'update', scope: 'global', content: lines(4, '行') }, exec),
+    () => small.execute({ action: 'update', scope: 'global', content: lines(4, '行') , force: true }, exec),
     /硬上限 3 行/,
     'maxFactLines 应覆盖默认值',
 );
 assert.match(
-    (await small.execute({ action: 'update', scope: 'global', content: lines(3, '行') }, exec)).text,
+    (await small.execute({ action: 'update', scope: 'global', content: lines(3, '行') , force: true }, exec)).text,
     /已写入全局记忆/,
     '上限设为 3 时正好 3 行应通过',
 );

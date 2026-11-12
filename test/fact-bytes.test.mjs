@@ -72,7 +72,7 @@ const bigLine = (bytes) => 'a'.repeat(bytes);
    正好是「多一个换行就越界」的边界。 */
 const before = readFileSync(factPath, 'utf8');
 await assert.rejects(
-    () => run({ action: 'update', scope: 'global', content: `${bigLine(8000)}\n` }),
+    () => run({ action: 'update', scope: 'global', content: `${bigLine(8000)}\n` , force: true }),
     (error) => {
         assert.match(error.message, /硬上限 100 行 \/ 8000 字节/, '报错应写明双上限');
         assert.match(error.message, /8001 字节/, '报错应写明实际字节数（含末位换行）');
@@ -88,7 +88,7 @@ assert.equal(readFileSync(factPath, 'utf8'), before, '被拒绝的写入不得�
 
 /* ── 2) 恰好 8000 字节（含末位换行）：通过（`<=` 语义） ── */
 const exactly8000 = `${bigLine(7999)}\n`;
-const wrote = await run({ action: 'update', scope: 'global', content: exactly8000 });
+const wrote = await run({ action: 'update', scope: 'global', content: exactly8000 , force: true });
 assert.match(wrote.text, /已写入全局记忆/, '恰好 8000 字节应写入成功');
 assert.match(wrote.text, /8000 字节/, '成功回执应报告字节数');
 assert.equal(readFileSync(factPath, 'utf8'), exactly8000, '磁盘上的 FACT.md 应正好 8000 字节（含末位换行）');
@@ -97,7 +97,7 @@ assert.equal(Buffer.byteLength(readFileSync(factPath, 'utf8'), 'utf8'), 8000, '�
 /* ── 3) 行数与字节都超：两项实际值都要出现 ── */
 const both = Array.from({ length: 120 }, (_, index) => `- 行 ${index + 1} ${'a'.repeat(80)}`).join('\n');
 await assert.rejects(
-    () => run({ action: 'update', scope: 'global', content: both }),
+    () => run({ action: 'update', scope: 'global', content: both , force: true }),
     (error) => {
         assert.match(error.message, /120 行（超出 20 行/, '应报实际行数与超出量');
         assert.match(error.message, /字节（超出 \d+ 字节/, '应报实际字节数与超出量');
@@ -108,20 +108,20 @@ await assert.rejects(
 
 /* ── 4) 字节按 UTF-8 计：中文 3 字节 ── */
 await assert.rejects(
-    () => run({ action: 'update', scope: 'global', content: '喵'.repeat(2700) }),
+    () => run({ action: 'update', scope: 'global', content: '喵'.repeat(2700) , force: true }),
     /8101 字节/,
     '中文应按 UTF-8 3 字节/字计（2700 字 = 8100 字节，加末位换行 = 8101）',
 );
 const cjk = '喵'.repeat(2666); // 7998 字节
 assert.match(
-    (await run({ action: 'update', scope: 'global', content: cjk })).text,
+    (await run({ action: 'update', scope: 'global', content: cjk , force: true })).text,
     /已写入全局记忆/,
     '7998 字节的中文内容应通过',
 );
 
 /* ── 5) `\r\n` 归一化：换行符只按 1 字节算 ── */
 const crlf = 'a\r\nb\r\nc';
-await run({ action: 'update', scope: 'global', content: crlf }); // 落盘 = "a\r\nb\r\nc\n" ⇒ 归一化 "a\nb\nc\n" = 6 字节
+await run({ action: 'update', scope: 'global', content: crlf , force: true }); // 落盘 = "a\r\nb\r\nc\n" ⇒ 归一化 "a\nb\nc\n" = 6 字节
 const crlfRead = await run({ action: 'read' });
 assert.match(crlfRead.text, /6 字节 \/ 上限 8000 字节/, '\\r\\n 应归一化成 \\n 后计数（每行尾 1 字节）');
 
@@ -147,12 +147,12 @@ mod.apply(makeCtx(), { maxFactBytes: 10 });
 const small = tools.get('memory');
 assert.ok(small, '应注册 memory 工具（自定义字节上限）');
 await assert.rejects(
-    () => small.execute({ action: 'update', scope: 'global', content: bigLine(11) }, exec),
+    () => small.execute({ action: 'update', scope: 'global', content: bigLine(11) , force: true }, exec),
     /硬上限 100 行 \/ 10 字节/,
     'maxFactBytes 应覆盖默认值，且行数上限保持 100',
 );
 assert.match(
-    (await small.execute({ action: 'update', scope: 'global', content: bigLine(9) }, exec)).text,
+    (await small.execute({ action: 'update', scope: 'global', content: bigLine(9) , force: true }, exec)).text,
     /已写入全局记忆/,
     '字节上限设为 10 时落盘恰好 10 字节（9 + 末位换行）应通过',
 );

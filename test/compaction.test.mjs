@@ -1365,7 +1365,7 @@ if (process.env.PERSONA_MEMORY_STORE_ENTRY === undefined) {
         writeFileSync(factPath, buildFact({ env: [ENV_A], targetBytes: 100 }), 'utf8');
         rmSync(indexPath, { force: true });
         const nextFact = `${readFileSync(factPath, 'utf8')}- 新写入的一条 node v9.9.9\n`;
-        await memoryTool.execute({ action: 'update', scope: 'global', content: nextFact }, { agent: { session: { header: { cwd: projectRoot } } } });
+        await memoryTool.execute({ action: 'update', scope: 'global', content: nextFact, force: true }, { agent: { session: { header: { cwd: projectRoot } } } });
         const factIndex = JSON.parse(readFileSync(indexPath, 'utf8')).entries;
         const factRecords = Object.values(factIndex).filter((meta) => meta.scope === 'fact');
         assert.ok(factRecords.length >= 2, `整篇写入后索引应有记录：${JSON.stringify(factIndex)}`);

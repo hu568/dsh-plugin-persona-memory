@@ -62,7 +62,8 @@ await check('replaceDocument：FACT 最终文本超字节上限 ⇒ 拒写、磁
 
 await check('replaceDocument：边界值可写，落盘字节数 <= 上限', async () => {
     store.configureStore({ maxFactBytes: 50, maxFactLines: 100 });
-    await store.replaceDocument('fact', factFile, `${'a'.repeat(49)}\n`);
+    // 本用例只看「上限闸口」：内容换成纯 a 会让条目数 1 → 0，显式 force 跳过覆盖防呆。
+await store.replaceDocument('fact', factFile, `${'a'.repeat(49)}\n`, { force: true });
     assert.ok(factBytes() <= 50, `落盘后必须 <= 50 字节，实际 ${factBytes()}`);
     assert.equal(store.countBytes(readFileSync(factFile, 'utf8')), 50);
 });
@@ -76,7 +77,7 @@ await check('工具 scope=global：先补末位换行再判（多一个换行就
 
     // 10 字节正文 + 末位换行 = 11 字节 ⇒ 必须拒写
     await assert.rejects(
-        () => tool.execute({ action: 'update', scope: 'global', content: 'a'.repeat(10) }, exec),
+        () => tool.execute({ action: 'update', scope: 'global', content: 'a'.repeat(10) , force: true }, exec),
         (error) => {
             assert.equal(error.code, 'MEMORY_BUDGET_EXCEEDED');
             assert.match(error.message, /11 字节/, '报错要按最终落盘文本计');
@@ -87,7 +88,7 @@ await check('工具 scope=global：先补末位换行再判（多一个换行就
     assert.equal(readFileSync(factFile, 'utf8'), '- A\n', '被拒时磁盘不变');
 
     // 9 字节正文 + 末位换行 = 10 字节 ⇒ 可写，且 read 不报超限
-    await tool.execute({ action: 'update', scope: 'global', content: 'a'.repeat(9) }, exec);
+    await tool.execute({ action: 'update', scope: 'global', content: 'a'.repeat(9) , force: true }, exec);
     assert.equal(factBytes(), 10);
     const readBack = await tool.execute({ action: 'read' }, exec);
     assert.ok(!readBack.text.includes('当前已超限'), '过了闸口就不该立刻报超限');

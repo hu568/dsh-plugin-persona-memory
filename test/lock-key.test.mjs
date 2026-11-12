@@ -121,7 +121,7 @@ await check('工具：显式 force:true 才允许无 revision 覆盖', async () 
 await check('工具：scope=global 不带 revision 仍然可写（向后兼容）', async () => {
     const tool = tools.memoryTool({});
     const exec = { agent: { session: { header: { cwd: projectRoot } } } };
-    const saved = await tool.execute({ action: 'update', scope: 'global', content: '# FACT.md\n\n- 全局一条\n' }, exec);
+    const saved = await tool.execute({ action: 'update', scope: 'global', content: '# FACT.md\n\n- 全局一条\n' , force: true }, exec);
     assert.match(saved.text, /已写入全局记忆/);
     assert.match(readFileSync(store.factPath(), 'utf8'), /全局一条/);
 });

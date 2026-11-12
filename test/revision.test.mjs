@@ -150,9 +150,12 @@ await check('replaceDocument 对项目 MEMORY.md 同样生效（scope=memory，c
         (error) => error.code === 'MEMORY_REVISION_CONFLICT',
     );
     assert.match(read(projectMemory), /别处追加/);
+    // 这条用例只验证「项目作用域 + cwd 锁键」，正文从 2 条变 1 条会撞 A2 的覆盖防呆，
+    // 所以显式 force（等同于「我确实要删掉『别处追加』那一条」）。
     const ok = await store.replaceDocument('memory', projectMemory, '# MEMORY\n\n- 我改的\n', {
         cwd: projectRoot,
         expectedRevision: store.contentRevision(read(projectMemory)),
+        force: true,
     });
     assert.equal(ok.written, true);
     assert.equal(read(projectMemory), '# MEMORY\n\n- 我改的\n');
