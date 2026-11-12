@@ -162,10 +162,24 @@ await check('insertEntry：全角／空白／引号差异也算重复（NFKC + �
     const first = await store.insertEntry('global', { text: 'AB 测试结论归一' });
     assert.equal(first.written, true);
     const before = sha(factPath);
-    const again = await store.insertEntry('global', { text: 'ＡＢ「测试结论」归一！' });
+    const again = await store.insertEntry('global', { text: 'ＡＢ「测试结论」归一。' });
     assert.equal(again.written, false);
     assert.equal(again.reason, 'duplicate-entry');
     assert.equal(sha(factPath), before);
+});
+
+await check('insertEntry：语义符号保留 —— A/B ≠ AB、v1.2 ≠ v12、50% ≠ 50（不误杀）', async () => {
+    const pairs = [
+        ['路径 A/B 两种写法都支持', '路径 AB 两种写法都支持'],
+        ['版本号 v1.2 已经安装完成', '版本号 v12 已经安装完成'],
+        ['阈值 50% 命中才注入', '阈值 50 命中才注入'],
+    ];
+    for (const [first, second] of pairs) {
+        const one = await store.insertEntry('global', { text: first });
+        assert.equal(one.written, true, `首条应该写入：${first}`);
+        const two = await store.insertEntry('global', { text: second });
+        assert.equal(two.written, true, `语义符号不同的结论不该判重：${second}`);
+    }
 });
 
 await check('insertEntry：同主题不同结论放行（不误杀）', async () => {
