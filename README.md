@@ -12,51 +12,35 @@ DSH 的角色库与长期记忆插件：把角色设定、全局/项目两级记
 | 核心引擎 | 会话快照 + 运行时上下文注入；两级记忆（FACT.md / MEMORY.md）带行·字节·字符闸口与乐观锁；水位触发的合并 → 精简 → 淘汰压缩管线 |
 | 运行依赖 | 本地文件 `$DSH_HOME/personas` 与 `$DSH_HOME/memory`、项目根 `MEMORY.md`；无外部服务（压缩复用会话模型） |
 
-最近一版 0.13.3 收紧了写入侧归一化：只抹空白与结构性标点、保住语义符号，并给侧车索引补上 reindex 试跑；0.13.2 让 `importance` 可维护、同分淘汰按重要性；0.13.1 把「一条结论 ≤120 字」写进工具契约。逐版本记录见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
+最近一版 0.13.3 收紧了写入侧归一化并给侧车索引补上 reindex 试跑；逐版本记录见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
 
 ---
 
 ## ✨ 功能总览
 
-### 角色库
+给 DSH 里的模型装上「人设 + 长期记忆」：角色设定和两级记忆在每轮对话前自动就位，过时的结论可以标记失效而不删除，写满了自动压缩。
 
-- **角色三件套**：`personas/<id>/` 下的 `persona.yml`（名字与简介）、`SOUL.md`（人格）、`USER.md`（用户档案）；同一时刻一个当前角色，`persona action=use` 在新会话生效。
-- **面板内增删改**：右侧栏「角色 / 记忆」里列表、切换、编辑、新建、删除，超过 4 个出现筛选，卡片可上下移动并写入 `personas/.personas-order`。
-- **id 越界一律拒**：所有按 id 的动作只接受 `[a-z0-9][a-z0-9-]*`，且角色目录必须落在角色库之下，`../x` 与绝对路径到不了删除调用。
+- **角色库**：每个角色一套人格、用户档案与简介，同一时刻一个当前角色；右侧栏面板里就能新建、编辑、排序、切换，`persona action=use` 在新会话生效。
+- **两级长期记忆**：全局事实（跨项目）与项目记忆（跟随工作区）分开管理，模型每轮都读得到；文件不存在就不注入，超限直接拒绝写入、不悄悄截断。
+- **长期日志**：只追加、不注入上下文的记录，随时按关键词检索；写入前自动脱敏，读回再打一次码。
+- **失效与重要性**：过时条目标记失效而不是删除，可一键恢复；条目带 0–100 重要性，压缩时优先淘汰不重要的。
+- **上下文注入**：角色与记忆以一条独立消息排在本轮用户消息之前，工具说明再长也压不掉角色，KV 缓存前缀保持稳定。
+- **面板与设置**：右侧栏「角色 / 记忆」三个标签管理角色、记忆、日志；设置页三个开关控制注入范围，开关只管注入，不影响读写。
+- **隐私**：插件不保存任何 API Key；日志落盘前脱敏（私钥块、`sk-`、`token=`、`Bearer`、手机号、身份证、卡号）。
 
-### 两级长期记忆
+---
 
-- **全局 FACT.md**：跨项目稳定事实，100 行 AND 8000 字节双闸口，超限直接抛错、不落盘。
-- **项目 MEMORY.md**：跟随会话工作区的项目根，生效上限取 `min(maxChars, maxProjectChars)`（默认 8000 字符），文件不存在就不注入。
-- **JOURNAL.jsonl**：不注入、只追加的长期日志，无条数上限；`memory action=search` 按相关度检索（2-gram 分词 + BM25 + 90 天半衰期），子串精确命中给保底。
-- **写入即脱敏**：JOURNAL 落盘前过 `redactSecrets()`（私钥块、`sk-`、`token=`、`Bearer`、手机号、身份证、卡号），读回再打一次码；占位符幂等。
+## ⚙️ 下载与安装
 
-### 生命周期与重要性
+在 DSH 插件管理器（创造模式）中安装：
 
-- **失效不删除**：条目行尾内联 `<!-- memory-state: status=superseded ... -->`，正文、行号、缩进一字不动；渲染层过滤、文件预算照占、淘汰时优先出局，`restoreEntry()` 摘掉注释即可恢复。
-- **重要性 0–100**：存在侧车索引 `memory/index.json`，缺省 50；`insertEntry` / `replaceEntry` 可带，改正文不带则沿用旧值；越界收敛、非法按缺省。
-- **淘汰评分**：近因 30% + 命中 20% + 置信度 10% + 重要性 30% + 人工标记 10%；近因用 `exp(-ageDays/90)` 衰减，缺元数据返回 1 分永不自动淘汰。
+```text
+plugin_manager action=install_bundle target="github:hu568/dsh-plugin-persona-memory"
+```
 
-### 注入与上下文
+桌面端也可走「设置 → 插件」安装；命令行安装、卸载与验证方式见下方[安装 / 运行](#安装--运行)。
 
-- **运行时上下文通道**：0.12.0 起角色与记忆不再进系统提示词，而是渲染成一条 user 角色消息（`source.kind = runtime-context`），由 `agent/pre-step` 排到本轮用户消息之前，序列为 `[快照, 用户消息, ...]`——工具说明再长也压不掉角色，KV 缓存前缀保持稳定。
-- **首条消息快照**：首条消息读盘后固化到内存与 `memory/snapshots/<sessionId>.json`，此后每轮读快照；注入开关不冻结，下一轮即生效，角色与记忆正文编辑仍是新会话生效。
-- **作用域收窄**：主会话注入 soul / user / facts；子代理只拿项目记忆与项目版写入契约（`subagentProjectOnly: false` 可回退为主会话一致）。
-- **库级信任门**：项目 `MEMORY.md` 可能随仓库分发，若项目在 git 仓库内或来源判断不出，注入段落后追加「来源不可信」告示，其中的指令不作为系统指令执行。
-
-### 预算、锁与压缩
-
-- **写入闸口**：按最终落盘文本判上限（FACT 行数 AND 字节、MEMORY 字符），超限抛 `MEMORY_BUDGET_EXCEEDED`。
-- **乐观锁**：整篇覆盖带 `expectedRevision`，项目作用域必填、全局可选；与磁盘不一致抛 409 且一个字节不写，`force: true` 是唯一逃生口。
-- **压缩管线**：水位 ≥85% 先合并、再逐条精简；仍 ≥100% 才淘汰（最多 5 条，投影到 ≤75%）；再超限返回超限错误。没有合并 / 精简 / 淘汰时绝不写盘。
-- **保护区**：人工锁定（`memory/locks.json`）与正文里的 `<!-- keep -->` 不参与淘汰；`★` 不是保护信号。
-
-### 工具、面板与设置
-
-- **`memory` 工具**：`read` / `update` / `append` / `search`，无路径参数，读写都在 `$DSH_HOME` 与项目根。
-- **`persona` 工具**：`list` / `current` / `show` / `use` / `create` / `update` / `delete`，当前角色不可删。
-- **右侧栏面板**：角色、记忆、日志三个标签；计量条、未保存徽标、`Ctrl/Cmd+S` 保存、`Ctrl/Cmd+Enter` 追加；项目记忆固定跟随主视图会话的工作区，没有手动选项目的下拉框。
-- **设置页「记忆」**：角色设定 / 全局记忆 / 项目记忆三个开关写 `memory/injection.json` 覆盖组合默认值；同时通过 `ctx.personaMemory.settings.register()` 给附属插件开声明式设置项与自定义子槽。
+> 装包会把包名追加进 profile 的 `dsh.profile.bundles`，引擎经 HMR 重载该层，**装完不用重启**；更新时若安装规格字符串不变会报 `ambiguous-install`，先 `remove` 再 `add`。Flutter 客户端没有 `sidebar.right.pane.tab` / `settings.section` 槽位，面板不渲染，但工具、注入与 HTTP 路由照常。
 
 ---
 
@@ -64,30 +48,21 @@ DSH 的角色库与长期记忆插件：把角色设定、全局/项目两级记
 
 ```mermaid
 flowchart TD
-    STEP["agent/pre-step 监听"] --> SNAP["会话快照 snapshot"]
-    SNAP -->|首条消息读盘后固化| CTX["运行时上下文消息 runtime-context"]
-    CTX --> SEQ["消息序列 快照 + 用户消息"]
-    STEP -->|每轮读盘| FILES["$DSH_HOME memory 与 personas"]
-    FILES --> FACT["FACT.md 全局记忆"]
-    FILES --> MEM["项目 MEMORY.md"]
-    FILES --> JNL["JOURNAL.jsonl 长期日志"]
-    TOOL["memory 工具"] -->|read append search| FILES
-    TOOL -->|update 整篇覆盖| WRITE["store 写入层"]
-    PANEL["右侧栏面板"] -->|保存| WRITE
-    WRITE -->|校验 revision| REV{"revision 一致"}
-    REV -->|冲突 409| TOOL
-    REV -->|一致| FILES
-    WRITE -->|超限| REJECT["闸口拒绝 不落盘"]
-    WRITE -->|水位 85 百分比| COMP["压缩管线 合并 精简 淘汰"]
-    COMP --> MODEL["会话模型或宿主默认模型"]
-    COMP --> FILES
-    SET["设置页 记忆开关"] -->|injection.json 覆盖层| STEP
-    SUB["子代理会话"] -->|仅项目记忆| STEP
+    USER[用户] --> DSH[DSH 宿主]
+    DSH --> PERSONA[角色库]
+    DSH --> MEMORY[全局 / 项目记忆]
+    DSH --> JOURNAL[长期日志]
+    PERSONA --> CTX[会话上下文]
+    MEMORY --> CTX
+    CTX --> MODEL[模型会话]
+    DSH --> PANEL[右侧栏 角色 / 记忆面板]
+    PANEL --> MEMORY
+    PANEL --> PERSONA
 ```
 
 ---
 
-# 对开发者
+# 🛠️ 对开发者
 
 ## 🚀 快速开始
 
@@ -185,6 +160,33 @@ node test/scope.test.mjs
 ```
 
 `test/run-all.mjs` 只用 node 内置模块，Windows / Linux / Android(proot) 通用，不依赖 PowerShell 或 Electron；开跑前会调用 `test/ensure-deps.mjs` 自动补 `schemastery` 与宿主包链接（缺才补，失败只警告）。需要真实宿主包的用例由 `test/_host-paths.mjs` 自动探测路径。
+
+---
+
+## 🧱 总架构图
+
+```mermaid
+flowchart TD
+    STEP["agent/pre-step 监听"] --> SNAP["会话快照 snapshot"]
+    SNAP -->|首条消息读盘后固化| CTX["运行时上下文消息 runtime-context"]
+    CTX --> SEQ["消息序列 快照 + 用户消息"]
+    STEP -->|每轮读盘| FILES["$DSH_HOME memory 与 personas"]
+    FILES --> FACT["FACT.md 全局记忆"]
+    FILES --> MEM["项目 MEMORY.md"]
+    FILES --> JNL["JOURNAL.jsonl 长期日志"]
+    TOOL["memory 工具"] -->|read append search| FILES
+    TOOL -->|update 整篇覆盖| WRITE["store 写入层"]
+    PANEL["右侧栏面板"] -->|保存| WRITE
+    WRITE -->|校验 revision| REV{"revision 一致"}
+    REV -->|冲突 409| TOOL
+    REV -->|一致| FILES
+    WRITE -->|超限| REJECT["闸口拒绝 不落盘"]
+    WRITE -->|水位 85 百分比| COMP["压缩管线 合并 精简 淘汰"]
+    COMP --> MODEL["会话模型或宿主默认模型"]
+    COMP --> FILES
+    SET["设置页 记忆开关"] -->|injection.json 覆盖层| STEP
+    SUB["子代理会话"] -->|仅项目记忆| STEP
+```
 
 ---
 
