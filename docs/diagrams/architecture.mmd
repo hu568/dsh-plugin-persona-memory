@@ -1,0 +1,11 @@
+flowchart TD
+    USER[用户] --> DSH[DSH 宿主]
+    DSH --> PERSONA[角色库]
+    DSH --> MEMORY[全局 / 项目记忆]
+    DSH --> JOURNAL[长期日志]
+    PERSONA --> CTX[会话上下文]
+    MEMORY --> CTX
+    CTX --> MODEL[模型会话]
+    DSH --> PANEL[右侧栏 角色 / 记忆面板]
+    PANEL --> MEMORY
+    PANEL --> PERSONA

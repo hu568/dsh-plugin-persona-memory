@@ -78,19 +78,12 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory-recall
 
 ## 🧱 架构
 
-```mermaid
-flowchart TD
-    USER[用户] --> DSH[DSH 宿主]
-    DSH --> PERSONA[角色库]
-    DSH --> MEMORY[全局 / 项目记忆]
-    DSH --> JOURNAL[长期日志]
-    PERSONA --> CTX[会话上下文]
-    MEMORY --> CTX
-    CTX --> MODEL[模型会话]
-    DSH --> PANEL[右侧栏 角色 / 记忆面板]
-    PANEL --> MEMORY
-    PANEL --> PERSONA
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/architecture-dark.svg">
+  <img src="docs/diagrams/architecture-light.svg" width="441" alt="架构图：用户 → DSH 宿主 → 角色库 / 全局与项目记忆 / 长期日志 → 会话上下文 → 模型会话；右侧栏面板读写角色库与记忆">
+</picture>
+
+渲染图直接入库（浅色 / 深色两版），源码见 [docs/diagrams/architecture.mmd](docs/diagrams/architecture.mmd)。
 
 ---
 
@@ -211,28 +204,12 @@ node test/scope.test.mjs
 
 ## 🧱 总架构图
 
-```mermaid
-flowchart TD
-    STEP["agent/pre-step 监听"] --> SNAP["会话快照 snapshot"]
-    SNAP -->|首条消息读盘后固化| CTX["运行时上下文消息 runtime-context"]
-    CTX --> SEQ["消息序列 快照 + 用户消息"]
-    STEP -->|每轮读盘| FILES["$DSH_HOME memory 与 personas"]
-    FILES --> FACT["FACT.md 全局记忆"]
-    FILES --> MEM["项目 MEMORY.md"]
-    FILES --> JNL["JOURNAL.jsonl 长期日志"]
-    TOOL["memory 工具"] -->|read append search| FILES
-    TOOL -->|update 整篇覆盖| WRITE["store 写入层"]
-    PANEL["右侧栏面板"] -->|保存| WRITE
-    WRITE -->|校验 revision| REV{"revision 一致"}
-    REV -->|冲突 409| TOOL
-    REV -->|一致| FILES
-    WRITE -->|超限| REJECT["闸口拒绝 不落盘"]
-    WRITE -->|水位 85 百分比| COMP["压缩管线 合并 精简 淘汰"]
-    COMP --> MODEL["会话模型或宿主默认模型"]
-    COMP --> FILES
-    SET["设置页 记忆开关"] -->|injection.json 覆盖层| STEP
-    SUB["子代理会话"] -->|仅项目记忆| STEP
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/architecture-full-dark.svg">
+  <img src="docs/diagrams/architecture-full-light.svg" width="1032" alt="总架构图：agent/pre-step 监听读盘固化成会话快照与运行时上下文消息；memory 工具与右侧栏面板经 store 写入层校验 revision 后落盘，超限被闸口拒绝，水位触发压缩管线">
+</picture>
+
+源码见 [docs/diagrams/architecture-full.mmd](docs/diagrams/architecture-full.mmd)。
 
 ---
 
@@ -242,6 +219,7 @@ flowchart TD
 dsh-plugin-persona-memory/
 ├── README.md                  # 本文件
 ├── docs/CHANGELOG.md          # 历史变更（0.8.6–0.14.0）
+├── docs/diagrams/             # 渲染好的架构图（SVG，浅色/深色）+ mermaid 源码 .mmd
 ├── LICENSE / package.json
 ├── cordis.patch.yml           # 宿主组合补丁
 ├── lib/                       # 宿主半源码，纯 ESM、无构建
@@ -264,6 +242,7 @@ dsh-plugin-persona-memory/
 | 文档 | 内容 |
 | --- | --- |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 历史变更记录，按版本倒序 |
+| [docs/diagrams/](docs/diagrams/) | 架构图的渲染产物（`*-light.svg` / `*-dark.svg`）与 mermaid 源码（`.mmd`） |
 | [LICENSE](LICENSE) | MIT 许可证全文 |
 | [package.json](package.json) | 版本、peerDependencies、入口与文件清单 |
 | [cordis.patch.yml](cordis.patch.yml) | 宿主组合补丁与默认配置 |
