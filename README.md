@@ -6,13 +6,13 @@ DSH 的角色库与长期记忆插件：把角色设定、全局/项目两级记
 
 | 状态 | 信息 |
 | --- | --- |
-| 最新版本 | [0.13.3](https://github.com/hu568/dsh-plugin-persona-memory/releases) |
+| 最新版本 | [0.13.4](https://github.com/hu568/dsh-plugin-persona-memory/releases) |
 | 平台 | DSH 宿主组合（桌面端与 Web 会话）；dsh-go 等 Flutter 客户端只有宿主侧生效，右侧栏面板不渲染 |
 | 技术栈 | 纯 ESM JavaScript · 无构建步骤（`lib/*.js` 直接加载）· Cordis 插件 · DSH 宿主 API（`systemPrompt.context`、`tools`、`commands`、`slots`、`webServer`） |
 | 核心引擎 | 会话快照 + 运行时上下文注入；两级记忆（FACT.md / MEMORY.md）带行·字节·字符闸口与乐观锁；水位触发的合并 → 精简 → 淘汰压缩管线 |
 | 运行依赖 | 本地文件 `$DSH_HOME/personas` 与 `$DSH_HOME/memory`、项目根 `MEMORY.md`；无外部服务（压缩复用会话模型） |
 
-最近一版 0.13.3 收紧了写入侧归一化并给侧车索引补上 reindex 试跑；逐版本记录见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
+最近一版 0.13.4 修好了右侧栏「角色 / 记忆」面板空白（Pane 里一个 hook 写在提前返回之后）；逐版本记录见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
 
 ---
 

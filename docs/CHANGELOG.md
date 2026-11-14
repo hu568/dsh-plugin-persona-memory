@@ -6,6 +6,22 @@
 
 ---
 
+### 修复（0.13.4）：右侧栏「角色 / 记忆」面板空白
+
+- **现象**：右栏标签页在、标题在，内容一片空白；宿主与设置页「记忆」都正常，GUI 上看不到任何报错。
+  桌面端 0.2.2-rc.3 与隔离实例 0.2.2-rc.1 都能复现 ⇒ 与宿主版本无关。
+- **根因**：0.13.2 的「整篇覆盖防呆」把 saveMemory 写成了 React.useCallback，而它被放在
+  Pane 的「data === null 就提前 return」**之后**。首次渲染（数据未到）只调用提前返回前的 hook；
+  第二次渲染（数据到手）多调用一个 hook ⇒ React 抛 Rendered more hooks than during the previous render，
+  slot 层的错误边界把它渲染成 <div data-slot-error="sidebar.right.pane.tab"></div>，于是面板永远空白。
+- **修法**：saveMemory 改成普通 async 函数并移到提前返回之前；两次渲染的 hook 顺序与数量一致。
+- **回归防线**：新增 test/client-hook-order.test.mjs（纯 node，静态读 lib/client.js）：断言 Pane 里
+  没有任何 hook 写在提前返回之后、saveMemory 不是 hook。用 0.13.3 的 lib/client.js 跑会红（定位到 1601 行），
+  修好后绿。
+- **验收**：dsh-lab（0.2.2-rc.1）装 0.13.4 后右栏面板正常渲染角色 / 记忆 / 日志三个标签页；已装份与仓库哈希一致。
+
+---
+
 ### 变更（0.13.1）：把「条目要短」写进工具契约
 
 - `memory` 工具描述新增格式约定：**一条只写一个结论、正文 ≤120 字**；命令/路径进「## 速查」，

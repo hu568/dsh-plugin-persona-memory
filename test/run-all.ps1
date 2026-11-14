@@ -55,6 +55,11 @@ Get-ChildItem (Join-Path $repo 'lib') -Filter '*.js' | ForEach-Object {
 & $plainNode (Join-Path $repo 'test\scope.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'scope.test.mjs (repo)' }
 
+# 客户端半的 hook 顺序（0.13.4）：Pane 里任何 hook 写到提前返回之后，面板第二次渲染就会
+# 抛 "Rendered more hooks than during the previous render"，被 slot 错误边界吞成空白。
+& $plainNode (Join-Path $repo 'test\client-hook-order.test.mjs')
+if ($LASTEXITCODE -ne 0) { $failures += 'client-hook-order.test.mjs (repo)' }
+
 Write-Host '=== 2/10 settings.test.mjs（仓库源码，纯 node：注入开关 + 设置项注册表）' -ForegroundColor Cyan
 & $plainNode (Join-Path $repo 'test\settings.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'settings.test.mjs (repo)' }
@@ -120,6 +125,15 @@ if (-not (Test-Path $installed)) {
         & $plainNode (Join-Path $repo "test\$pure.test.mjs")
         if ($LASTEXITCODE -ne 0) { $failures += "$pure.test.mjs (installed)" }
         Remove-Item Env:PERSONA_MEMORY_ENTRY -ErrorAction SilentlyContinue
+    }
+
+    # 已装份的客户端半同样要查 hook 顺序：装进去的那份才是用户真正跑的。
+    $installedClient = Join-Path $installed 'lib\client.js'
+    if (Test-Path $installedClient) {
+        $env:PERSONA_MEMORY_CLIENT_ENTRY = 'file:///' + ($installedClient -replace '\\', '/')
+        & $plainNode (Join-Path $repo 'test\client-hook-order.test.mjs')
+        if ($LASTEXITCODE -ne 0) { $failures += 'client-hook-order.test.mjs (installed)' }
+        Remove-Item Env:PERSONA_MEMORY_CLIENT_ENTRY -ErrorAction SilentlyContinue
     }
 
     # store.test.mjs 走 ./store 子路径：已装份还没有 lib/store.js（0.6.1 之前）时跳过，不判失败。
