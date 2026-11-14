@@ -26,6 +26,7 @@ DSH 的角色库与长期记忆插件：把角色设定、全局/项目两级记
 - **失效与重要性**：过时条目标记失效而不是删除，可一键恢复；条目带 0–100 重要性，压缩时优先淘汰不重要的。
 - **上下文注入**：角色与记忆以一条独立消息排在本轮用户消息之前，工具说明再长也压不掉角色，KV 缓存前缀保持稳定。
 - **面板与设置**：右侧栏「角色 / 记忆」三个标签管理角色、记忆、日志；设置页顶部是横向页签（注入开关 / 各附属插件各占一页），三个注入开关只管注入，不影响读写。
+- **可拆可合**：读侧自动召回、写侧自动沉淀、角色卡导入导出都是独立发布的[附属插件](#-附属插件)，不装也不影响主插件的角色与记忆。
 - **隐私**：插件不保存任何 API Key；日志落盘前脱敏（私钥块、`sk-`、`token=`、`Bearer`、手机号、身份证、卡号）。
 
 ---
@@ -38,9 +39,40 @@ DSH 的角色库与长期记忆插件：把角色设定、全局/项目两级记
 plugin_manager action=install_bundle target="github:hu568/dsh-plugin-persona-memory"
 ```
 
-桌面端也可走「设置 → 插件」安装；命令行安装、卸载与验证方式见下方[安装 / 运行](#安装--运行)。
+桌面端也可走「设置 → 插件」安装；命令行安装、卸载与验证方式见下方[安装 / 运行](#安装--运行)。想要自动召回、自动沉淀或角色卡导入导出，再按[附属插件](#-附属插件)一节各装一个。
 
 > 装包会把包名追加进 profile 的 `dsh.profile.bundles`，引擎经 HMR 重载该层，**装完不用重启**；更新时若安装规格字符串不变会报 `ambiguous-install`，先 `remove` 再 `add`。Flutter 客户端没有 `sidebar.right.pane.tab` / `settings.section` 槽位，面板不渲染，但工具、注入与 HTTP 路由照常。
+
+---
+
+## 🧩 附属插件
+
+主插件自己**不附带**这些功能：它们是各自独立发布、独立安装的插件，共用同一个角色库 / 记忆文件与「设置 → 记忆」页签。不装任何附属插件，主插件的角色与记忆照常工作。
+
+| 附属插件 | 最新版本 | 做什么 | 装后在「设置 → 记忆」 |
+| --- | --- | --- | --- |
+| [dsh-persona-memory-recall](https://github.com/hu568/dsh-plugin-persona-memory-recall#readme)<br>`@dsh-external/dsh-persona-memory-recall` | 0.6.0 | **读侧自动召回**：每轮拿用户消息去本地 `JOURNAL.jsonl` 里 BM25 检索（可选叠加 bge-m3 语义通道 + RRF 融合），把命中的历史片段排在本轮用户消息之前，不占系统提示词前缀 | 页签「自动召回」（含「高级」「语义」分组） |
+| [dsh-persona-memory-consolidate](https://github.com/hu568/dsh-plugin-persona-memory-consolidate#readme)<br>`@dsh-external/dsh-persona-memory-consolidate` | 0.7.1 | **写侧自动沉淀**：回合结束只做本地暂存，攒够 6 轮 / 8000 字符才花一次模型调用提炼结论，过质量闸口后经主插件 `store` 写进 JOURNAL / FACT / 项目 MEMORY；撞限只降级 JOURNAL，绝不压缩已有记忆 | 页签「自动沉淀」（含「高级」分组） |
+| [dsh-persona-memory-io](https://github.com/hu568/dsh-plugin-persona-memory-io#readme)<br>`@dsh-external/dsh-persona-memory-io` | 0.2.0 | **角色卡导入导出**：把角色导出成 persona-select 兼容的 JSON / PNG 角色卡（PNG 走 iTXt 块，封面像素零改动），也能把卡片作为**新角色**导回角色库；附 `persona_io` 工具 | 独占一个整页页签「角色卡」 |
+
+安装与主插件同规格，先 `remove` 再 `add`（规格字符串不变时更新会报 `ambiguous-install`）：
+
+```powershell
+# 插件管理器（创造模式）：
+#   plugin_manager action=install_bundle target="github:hu568/dsh-plugin-persona-memory-recall"
+dsh plugin --profile <profile> add github:hu568/dsh-plugin-persona-memory-recall
+dsh plugin --profile <profile> add github:hu568/dsh-plugin-persona-memory-consolidate
+dsh plugin --profile <profile> add github:hu568/dsh-plugin-persona-memory-io
+
+# 卸载（都不动 personas/ 与 memory/，也不影响主插件）
+dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory-recall
+```
+
+三点容易踩的：
+
+- **各装一行**：每个附属插件在宿主组合里都是自己的插件行，装一个只多一行；主插件缺席时 io 与 recall 仍能读写同一个角色库 / 日志，只是没有角色注入与设置页页签。
+- **peer 版本要匹配**：附属插件用 peerDependencies 声明它要求的主插件范围（以各插件 `package.json` 为准）。pnpm 报 peer 不满足时先看范围再决定装不装，别硬压。
+- **装包不用重启，改源码才要**：理由与主插件相同（DSH 不监听 `node_modules`，ESM 有加载缓存）。
 
 ---
 
