@@ -60,6 +60,10 @@ if ($LASTEXITCODE -ne 0) { $failures += 'scope.test.mjs (repo)' }
 & $plainNode (Join-Path $repo 'test\client-hook-order.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'client-hook-order.test.mjs (repo)' }
 
+# 设置页的横向页签（0.14.0）：页签顺序、每页渲染的内容、两次渲染 hook 数一致。
+& $plainNode (Join-Path $repo 'test\settings-tabs.test.mjs')
+if ($LASTEXITCODE -ne 0) { $failures += 'settings-tabs.test.mjs (repo)' }
+
 Write-Host '=== 2/10 settings.test.mjs（仓库源码，纯 node：注入开关 + 设置项注册表）' -ForegroundColor Cyan
 & $plainNode (Join-Path $repo 'test\settings.test.mjs')
 if ($LASTEXITCODE -ne 0) { $failures += 'settings.test.mjs (repo)' }
@@ -133,6 +137,9 @@ if (-not (Test-Path $installed)) {
         $env:PERSONA_MEMORY_CLIENT_ENTRY = 'file:///' + ($installedClient -replace '\\', '/')
         & $plainNode (Join-Path $repo 'test\client-hook-order.test.mjs')
         if ($LASTEXITCODE -ne 0) { $failures += 'client-hook-order.test.mjs (installed)' }
+        # 设置页的页签同样要查已装份：装进去的那份才是用户看到的。
+        & $plainNode (Join-Path $repo 'test\settings-tabs.test.mjs')
+        if ($LASTEXITCODE -ne 0) { $failures += 'settings-tabs.test.mjs (installed)' }
         Remove-Item Env:PERSONA_MEMORY_CLIENT_ENTRY -ErrorAction SilentlyContinue
     }
 

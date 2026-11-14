@@ -6,13 +6,13 @@ DSH 的角色库与长期记忆插件：把角色设定、全局/项目两级记
 
 | 状态 | 信息 |
 | --- | --- |
-| 最新版本 | [0.13.4](https://github.com/hu568/dsh-plugin-persona-memory/releases) |
+| 最新版本 | [0.14.0](https://github.com/hu568/dsh-plugin-persona-memory/releases) |
 | 平台 | DSH 宿主组合（桌面端与 Web 会话）；dsh-go 等 Flutter 客户端只有宿主侧生效，右侧栏面板不渲染 |
 | 技术栈 | 纯 ESM JavaScript · 无构建步骤（`lib/*.js` 直接加载）· Cordis 插件 · DSH 宿主 API（`systemPrompt.context`、`tools`、`commands`、`slots`、`webServer`） |
 | 核心引擎 | 会话快照 + 运行时上下文注入；两级记忆（FACT.md / MEMORY.md）带行·字节·字符闸口与乐观锁；水位触发的合并 → 精简 → 淘汰压缩管线 |
 | 运行依赖 | 本地文件 `$DSH_HOME/personas` 与 `$DSH_HOME/memory`、项目根 `MEMORY.md`；无外部服务（压缩复用会话模型） |
 
-最近一版 0.13.4 修好了右侧栏「角色 / 记忆」面板空白（Pane 里一个 hook 写在提前返回之后）；逐版本记录见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
+最近一版 0.14.0 把「设置 → 记忆」改成横向页签（注入开关 / 角色卡 / 各附属插件各占一页）；逐版本记录见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
 
 ---
 
@@ -25,7 +25,7 @@ DSH 的角色库与长期记忆插件：把角色设定、全局/项目两级记
 - **长期日志**：只追加、不注入上下文的记录，随时按关键词检索；写入前自动脱敏，读回再打一次码。
 - **失效与重要性**：过时条目标记失效而不是删除，可一键恢复；条目带 0–100 重要性，压缩时优先淘汰不重要的。
 - **上下文注入**：角色与记忆以一条独立消息排在本轮用户消息之前，工具说明再长也压不掉角色，KV 缓存前缀保持稳定。
-- **面板与设置**：右侧栏「角色 / 记忆」三个标签管理角色、记忆、日志；设置页三个开关控制注入范围，开关只管注入，不影响读写。
+- **面板与设置**：右侧栏「角色 / 记忆」三个标签管理角色、记忆、日志；设置页顶部是横向页签（注入开关 / 各附属插件各占一页），三个注入开关只管注入，不影响读写。
 - **隐私**：插件不保存任何 API Key；日志落盘前脱敏（私钥块、`sk-`、`token=`、`Bearer`、手机号、身份证、卡号）。
 
 ---
@@ -115,6 +115,20 @@ dsh plugin --profile <profile> remove @dsh-external/dsh-persona-memory
 | `trustProjectFromRepo` | `true` | 库级信任门；`false` = 明确信任、不告示 |
 | `panelPath` | `/persona-memory` | 面板 HTTP 前缀（客户端一半写死，改前缀要两半同改） |
 
+### 设置页页签与附属插件扩展点
+
+「设置 → 记忆」顶部是一条横向页签，页签按下面的顺序生成（没有对应内容的不出现）：
+
+| 页签 | 来源 | 内容 |
+| --- | --- | --- |
+| 注入开关 | 本插件 | 三个注入开关 + 开关覆盖层路径 |
+| （附属插件整页） | 客户端子槽 `settings.persona-memory.tab` | 每个注册项一整页，用 `renderSlot(..., { only: id })` 只渲染自己那一份 |
+| （声明式设置项分组） | `ctx.personaMemory.settings.register()` 的 `group` | 按「 · 」前的顶层名归并成一页（如 `自动召回` / `自动召回 · 高级` 合成一页），组内仍可折叠 |
+
+- 整页插件注册：`ctx.slots.inject('settings.persona-memory.tab', () => ctx.slots.register({ name: 'settings.persona-memory.tab', id, order, label }, Component))`。
+- 旧写法 `settings.persona-memory.item`（往本插件页里挂一行）仍受支持；同一个 id 若也注册了整页，则只画整页，不再重复画那行。
+- 未选中的页保持挂载（`hidden`），切回来时草稿、折叠状态、搜索词都还在。
+
 ### 数据落点
 
 | 平面 | 位置 |
@@ -195,7 +209,7 @@ flowchart TD
 ```
 dsh-plugin-persona-memory/
 ├── README.md                  # 本文件
-├── docs/CHANGELOG.md          # 历史变更（0.8.6–0.13.1）
+├── docs/CHANGELOG.md          # 历史变更（0.8.6–0.14.0）
 ├── LICENSE / package.json
 ├── cordis.patch.yml           # 宿主组合补丁
 ├── lib/                       # 宿主半源码，纯 ESM、无构建
